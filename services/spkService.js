@@ -422,7 +422,7 @@ async function getTugasSaya(id_pelaksana, options = {}) {
     // Prinsip TEPAT: Validasi pelaksana exist
     const { data: pelaksanaExists, error: checkError } = await supabase
       .from('master_pihak')
-      .select('id_pihak, nama_pihak, role')
+      .select('id_pihak, nama, tipe')
       .eq('id_pihak', id_pelaksana)
       .single();
     
@@ -430,7 +430,7 @@ async function getTugasSaya(id_pelaksana, options = {}) {
       throw new Error(`ID Pelaksana '${id_pelaksana}' tidak ditemukan di master_pihak`);
     }
     
-    console.log('✅ Pelaksana valid:', pelaksanaExists.nama_pihak, '(' + pelaksanaExists.role + ')');
+    console.log('✅ Pelaksana valid:', pelaksanaExists.nama, '(' + pelaksanaExists.tipe + ')');
     
     // Query tugas dengan pagination
     // Prinsip SKALABILITAS: Use range() untuk pagination
@@ -440,7 +440,6 @@ async function getTugasSaya(id_pelaksana, options = {}) {
       .eq('id_pelaksana', id_pelaksana)
       .in('status_tugas', statusFilter)
       .order('prioritas', { ascending: true }) // Order by prioritas (1=Tinggi first)
-      .order('tanggal_dibuat', { ascending: false }) // Then by newest
       .range(offset, offset + limit - 1); // Pagination
     
     if (tugasError) {
@@ -550,7 +549,7 @@ async function uploadLogAktivitas5W1H(id_petugas, arrayLog) {
     // Prinsip TEPAT: Validasi petugas exist
     const { data: petugasExists, error: checkError } = await supabase
       .from('master_pihak')
-      .select('id_pihak, nama_pihak')
+      .select('id_pihak, nama')
       .eq('id_pihak', id_petugas)
       .single();
     
@@ -558,7 +557,7 @@ async function uploadLogAktivitas5W1H(id_petugas, arrayLog) {
       throw new Error(`ID Petugas '${id_petugas}' tidak ditemukan di master_pihak`);
     }
     
-    console.log('✅ Petugas valid:', petugasExists.nama_pihak);
+    console.log('✅ Petugas valid:', petugasExists.nama);
     
     // Prepare untuk collect results
     const logBerhasil = [];
