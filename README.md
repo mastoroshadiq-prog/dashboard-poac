@@ -52,9 +52,15 @@ SUPABASE_KEY=your-anon-key-here
 # Server Configuration
 PORT=3000
 NODE_ENV=development
+
+# JWT Configuration (Platform A)
+JWT_SECRET=your-128-char-hex-secret-here
+JWT_EXPIRES_IN=7d
 ```
 
-> **⚠️ IMPORTANT:** Never commit `.env` file! Use `.env.example` as template.
+> **⚠️ IMPORTANT:** 
+> - Never commit `.env` file! Use `.env.example` as template.
+> - Generate JWT_SECRET: `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"`
 
 ### **4. Database Setup**
 
@@ -99,14 +105,23 @@ node index.js
 
 **Example:**
 ```bash
-# PowerShell
+# PowerShell - Dashboard
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" -Method GET | ConvertTo-Json -Depth 10
 
-# cURL
+# PowerShell - Platform A (with JWT)
+$token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/tugas/saya" `
+  -Headers @{Authorization="Bearer $token"} | ConvertTo-Json -Depth 5
+
+# cURL - Dashboard
 curl -X GET http://localhost:3000/api/v1/dashboard/kpi-eksekutif
+
+# cURL - Platform A
+curl -X GET http://localhost:3000/api/v1/spk/tugas/saya \
+  -H "Authorization: Bearer <your-jwt-token>"
 ```
 
-### **SPK Management (WRITE/INPUT)** ✅
+### **SPK Management - Platform B (WRITE/INPUT)** ✅
 
 | Endpoint | Method | Description | Status |
 |----------|--------|-------------|--------|
@@ -114,6 +129,20 @@ curl -X GET http://localhost:3000/api/v1/dashboard/kpi-eksekutif
 | `/spk/:id_spk/tugas` | POST | Add Batch Tugas to SPK | ✅ M-4.2 |
 | `/spk/:id_spk` | PUT | Update SPK Header | 🔜 M-4.3 |
 | `/spk/:id_spk/tugas/:id_tugas` | PUT | Update Tugas Status | 🔜 M-4.4 |
+
+### **Platform A - Mobile Field Workers** 🔐 ✅
+
+| Endpoint | Method | Auth | Description | Status |
+|----------|--------|------|-------------|--------|
+| `/spk/tugas/saya` | GET | JWT | Get My Assigned Tasks (paginated) | ✅ NEW! |
+| `/spk/log_aktivitas` | POST | JWT | Upload 5W1H Activity Log (batch + auto-trigger) | ✅ NEW! |
+
+**Features:**
+- 🔐 **JWT Authentication** - Secure token-based auth for mobile workers
+- 📱 **Pagination** - Efficient data loading (default 100, max 500 items)
+- 📊 **5W1H Digital Trail** - Complete activity logging (Who, What, When, Where, Why, How)
+- 🔧 **Auto-Trigger Work Orders** - Automatic APH/SANITASI tasks on G1/G4 status
+- ✅ **Status Auto-Update** - BARU → DIKERJAKAN on first log upload
 
 ---
 
@@ -242,6 +271,158 @@ node test-add-tugas.js
 
 ---
 
+### **Platform A: Get My Tasks (Mobile Workers)**
+
+**Endpoint:** `GET /api/v1/spk/tugas/saya` 🔐
+
+**Authentication:** JWT Required (Bearer Token)
+
+**Query Parameters:**
+```
+?page=1              # Page number (default: 1)
+&limit=100           # Items per page (default: 100, max: 500)
+&status=BARU,DIKERJAKAN  # Filter by status (default: BARU,DIKERJAKAN)
+```
+
+**Request Headers:**
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "tugas": [
+      {
+        "id_tugas": "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380c01",
+        "id_spk": "d3ffbc99-9c0b-4ef8-bb6d-6bb9bd380d01",
+        "id_pelaksana": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10",
+        "tipe_tugas": "INSPEKSI",
+        "status_tugas": "BARU",
+        "target_json": {
+          "target_npokok": ["b1ffbc99-...", "b1ffbc99-..."],
+          "deadline": "2025-11-10"
+        },
+        "prioritas": 1
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 100,
+      "total_items": 3,
+      "total_pages": 1,
+      "has_next": false,
+      "has_prev": false
+    }
+  },
+  "message": "Ditemukan 3 tugas untuk pelaksana"
+}
+```
+
+**Validation:**
+- ✅ JWT token validation (signature, expiration)
+- ✅ Extract `id_pelaksana` from token payload
+- ✅ Validate pelaksana exists in `master_pihak`
+- ✅ Pagination bounds (max 500 items)
+- ✅ Order by: prioritas ASC
+
+**Token Generation:**
+```bash
+# Generate test token
+node generate-token-only.js
+
+# Copy token and test
+$token = "eyJhbG..."
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/tugas/saya" `
+  -Headers @{Authorization="Bearer $token"}
+```
+
+📄 **Full Documentation:** `docs/VERIFICATION_PLATFORM_A_INTEGRATION.md`
+
+---
+
+### **Platform A: Upload Activity Log (5W1H)**
+
+**Endpoint:** `POST /api/v1/spk/log_aktivitas` 🔐
+
+**Authentication:** JWT Required (Bearer Token)
+
+**Request Body:**
+```json
+{
+  "log_aktivitas": [
+    {
+      "id_tugas": "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380c01",
+      "id_npokok": "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380b01",
+      "timestamp_eksekusi": "2025-11-06T14:30:00",
+      "gps_eksekusi": {
+        "lat": -6.2088,
+        "lon": 106.8456
+      },
+      "hasil_json": {
+        "status_aktual": "G1",
+        "kondisi": "Baik",
+        "catatan": "Pohon sehat, perlu APH"
+      }
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "log_diterima": 1,
+    "log_berhasil": 1,
+    "log_gagal": 0,
+    "auto_trigger": {
+      "work_order_created": 1,
+      "tugas_updated": 1
+    }
+  },
+  "message": "1 log aktivitas berhasil diupload"
+}
+```
+
+**5W1H Digital Trail:**
+- **WHO:** `id_petugas` (extracted from JWT token)
+- **WHAT:** `id_tugas` (task being executed)
+- **WHEN:** `timestamp_eksekusi` (execution time)
+- **WHERE:** `id_npokok` + `gps_eksekusi` (location)
+- **WHY:** Implicit in task assignment
+- **HOW:** `hasil_json` (execution results)
+
+**Auto-Trigger Logic:**
+- 🔧 **G1 Status** → Auto-create **APH** Work Order
+- 🔧 **G4 Status** → Auto-create **SANITASI** Work Order
+- ✅ **First Log** → Auto-update task status: `BARU` → `DIKERJAKAN`
+
+**Validation:**
+- ✅ JWT token validation
+- ✅ Batch size limit (max 1000 logs)
+- ✅ FK validation: `id_tugas` exists in `spk_tugas`
+- ✅ FK validation: `id_npokok` exists in `kebun_n_pokok` (optional)
+- ✅ GPS format validation (lat/lon)
+- ✅ Timestamp format validation (ISO 8601)
+
+**Test Script:**
+```bash
+# Automated test (server + token + HTTP requests)
+node test-full-auto.js
+
+# Expected output:
+# ✅ GET /tugas/saya: 200 OK (3 tasks)
+# ✅ POST /log_aktivitas: 201 Created (1 log, 1 auto-trigger)
+```
+
+📄 **Verification:** `docs/VERIFICATION_PLATFORM_A_INTEGRATION.md`
+
+---
+
 ## 🗄️ Database Schema
 
 ### **Core Tables:**
@@ -260,16 +441,35 @@ spk_tugas
 ├── id_tugas (PK, UUID)
 ├── id_spk (FK → spk_header)
 ├── id_pelaksana (FK → master_pihak)
-├── tipe_tugas (ENUM: VALIDASI_DRONE, APH, PANEN, LAINNYA)
+├── tipe_tugas (ENUM: VALIDASI_DRONE, APH, PANEN, SANITASI, INSPEKSI, PEMUPUKAN, LAINNYA)
 ├── status_tugas (ENUM: BARU, DIKERJAKAN, SELESAI, DITOLAK)
 ├── target_json (JSONB)
 ├── prioritas (INTEGER)
 └── created_at (TIMESTAMP)
 
+log_aktivitas_5w1h (Platform A)
+├── id_log (PK, UUID)
+├── id_tugas (FK → spk_tugas)
+├── id_petugas (FK → master_pihak)
+├── id_npokok (UUID, optional FK → kebun_n_pokok)
+├── timestamp_eksekusi (TIMESTAMP)
+├── gps_eksekusi (JSONB: {lat, lon})
+├── hasil_json (JSONB)
+└── created_at (TIMESTAMP)
+
 master_pihak
 ├── id_pihak (PK, UUID)
-├── nama_pihak (TEXT)
-├── role (TEXT)
+├── nama (TEXT)
+├── tipe (TEXT: PELAKSANA, ASISTEN, MANDOR, etc.)
+├── kode_unik (TEXT)
+└── created_at (TIMESTAMP)
+
+kebun_n_pokok
+├── id_npokok (PK, UUID)
+├── id_tanaman (TEXT)
+├── n_baris (INTEGER)
+├── n_pokok (INTEGER)
+├── kode (TEXT)
 └── created_at (TIMESTAMP)
 ```
 
@@ -277,6 +477,9 @@ master_pihak
 - `spk_header.id_asisten_pembuat` → `master_pihak.id_pihak`
 - `spk_tugas.id_spk` → `spk_header.id_spk`
 - `spk_tugas.id_pelaksana` → `master_pihak.id_pihak`
+- `log_aktivitas_5w1h.id_tugas` → `spk_tugas.id_tugas` (Platform A)
+- `log_aktivitas_5w1h.id_petugas` → `master_pihak.id_pihak` (Platform A)
+- `log_aktivitas_5w1h.id_npokok` → `kebun_n_pokok.id_npokok` (optional)
 
 ---
 
@@ -288,11 +491,20 @@ master_pihak
 # Test Dashboard KPI
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" -Method GET
 
-# Test Create SPK
+# Test Create SPK (Platform B)
 .\test-post-spk.ps1
 
-# Test Add Tugas
+# Test Add Tugas (Platform B)
 .\test-add-tugas-api.ps1
+
+# Test Platform A - Get Tasks
+node generate-token-only.js  # Copy token
+$token = "eyJhbG..."
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/tugas/saya" `
+  -Headers @{Authorization="Bearer $token"}
+
+# Test Platform A - Upload Log
+# (Use PowerShell command from generate-token-only.js output)
 ```
 
 ### **Automated Testing (Node.js)**
@@ -301,11 +513,12 @@ Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" -M
 # Test connection
 node debug-supabase.js
 
-# Test M-4.1
-node test-spk-create.js
+# Test Platform B
+node test-spk-create.js      # M-4.1
+node test-add-tugas.js       # M-4.2
 
-# Test M-4.2
-node test-add-tugas.js
+# Test Platform A (Full Auto)
+node test-full-auto.js       # JWT + GET + POST endpoints
 
 # Test dashboard endpoints
 node test-teknis.js
@@ -328,7 +541,7 @@ node check-table-structure.js
 ```
 dashboard-poac/
 ├── config/
-│   └── supabase.js          # Supabase client configuration
+│   └── supabase.js               # Supabase client configuration
 ├── context/
 │   ├── master_priming_prompt.md
 │   ├── optimalisasi_skema_db_v1.1.md
@@ -336,24 +549,33 @@ dashboard-poac/
 ├── docs/
 │   ├── VERIFICATION_M4.1_CREATE_SPK_HEADER.md
 │   ├── VERIFICATION_M4.2_ADD_TUGAS_SPK.md
+│   ├── VERIFICATION_PLATFORM_A_INTEGRATION.md  # 🆕 Platform A
 │   ├── TESTING_GUIDE.md
 │   └── TROUBLESHOOTING.md
+├── middleware/
+│   └── authMiddleware.js         # 🆕 JWT authentication
 ├── routes/
-│   ├── dashboardRoutes.js   # Dashboard endpoints (M-1.x)
-│   └── spkRoutes.js          # SPK management endpoints (M-4.x)
+│   ├── dashboardRoutes.js        # Dashboard endpoints (M-1.x)
+│   └── spkRoutes.js              # SPK + Platform A endpoints (M-4.x)
 ├── services/
-│   ├── dashboardService.js   # Dashboard business logic
-│   ├── operasionalService.js # Operational data aggregation
-│   ├── teknisService.js      # Technical data processing
-│   └── spkService.js         # SPK business logic
+│   ├── dashboardService.js       # Dashboard business logic
+│   ├── operasionalService.js     # Operational data aggregation
+│   ├── teknisService.js          # Technical data processing
+│   └── spkService.js             # SPK + Platform A business logic
 ├── sql/
-│   ├── dummy_data_v1_2.sql   # Database schema & initial data
-│   └── verify_data.sql       # Data verification queries
-├── .env.example              # Environment template
-├── .gitignore                # Git exclusions
-├── index.js                  # Main server entry point
-├── package.json              # Dependencies
-└── README.md                 # This file
+│   ├── dummy_data_v1_2.sql       # Database schema & initial data
+│   ├── test_data_platform_a.sql  # 🆕 Platform A test data
+│   ├── create_log_aktivitas_5w1h.sql      # 🆕 5W1H schema (with FK)
+│   ├── create_log_aktivitas_5w1h_simple.sql  # 🆕 5W1H schema (simplified)
+│   └── verify_data.sql           # Data verification queries
+├── generate-token-only.js        # 🆕 JWT token generator
+├── test-full-auto.js             # 🆕 Automated Platform A testing
+├── .env.example                  # Environment template
+├── .gitignore                    # Git exclusions
+├── index.js                      # Main server entry point
+├── package.json                  # Dependencies
+├── QUICK_START_PLATFORM_A.md     # 🆕 Platform A quick guide
+└── README.md                     # This file
 ```
 
 ---
@@ -362,11 +584,14 @@ dashboard-poac/
 
 ### **Implemented:**
 - ✅ Environment variables for credentials (`.env`)
+- ✅ **JWT Authentication for Platform A** (Bearer token, 7-day expiration)
 - ✅ Server-side validation for all inputs
 - ✅ FK constraints for data integrity
 - ✅ Enum validation for status fields
 - ✅ `.gitignore` protection for `.env` file
 - ✅ Supabase Row Level Security (RLS) ready
+- ✅ **Token-based authorization** (id_pelaksana extraction from JWT)
+- ✅ **Pagination bounds** (max 500 items per request)
 
 ### **Best Practices:**
 - Never commit `.env` file
@@ -374,6 +599,8 @@ dashboard-poac/
 - Use `service_role` key only in server-side
 - Enable RLS policies in production
 - Validate all user inputs on server
+- **Rotate JWT_SECRET regularly in production**
+- **Store tokens securely on mobile devices** (Flutter Secure Storage)
 
 ---
 
@@ -407,6 +634,9 @@ dashboard-poac/
 | M-1.3 | Dashboard Teknis | ✅ Complete | ✅ VERIFICATION_M1.3_DASHBOARD_TEKNIS.md |
 | M-4.1 | Create SPK Header | ✅ Complete | ✅ VERIFICATION_M4.1_CREATE_SPK_HEADER.md |
 | M-4.2 | Add Tugas to SPK | ✅ Complete | ✅ VERIFICATION_M4.2_ADD_TUGAS_SPK.md |
+| **Platform A** | **Mobile Field Workers** | **✅ Complete** | **✅ VERIFICATION_PLATFORM_A_INTEGRATION.md** |
+| - | GET /tugas/saya (JWT) | ✅ Complete | - |
+| - | POST /log_aktivitas (5W1H + Auto-Trigger) | ✅ Complete | - |
 | M-4.3 | Update SPK | 🔜 Next | - |
 | M-4.4 | Update Tugas | 🔜 Planned | - |
 
@@ -476,16 +706,20 @@ ALTER TABLE spk_tugas DISABLE ROW LEVEL SECURITY;
 - [x] M-1.2: Dashboard Operasional
 - [x] M-1.3: Dashboard Teknis
 
-### **Phase 3: SPK WRITE APIs** 🔄
+### **Phase 3: SPK WRITE APIs** ✅
 - [x] M-4.1: Create SPK Header
 - [x] M-4.2: Add Tugas (Batch)
+- [x] **Platform A: JWT Authentication**
+- [x] **Platform A: GET /tugas/saya (Pagination)**
+- [x] **Platform A: POST /log_aktivitas (5W1H + Auto-Trigger)**
 - [ ] M-4.3: Update SPK
 - [ ] M-4.4: Update Tugas
 
-### **Phase 4: Advanced Features** 🔜
-- [ ] M-5.x: Workflow automation (status transitions)
+### **Phase 4: Advanced Features** �
+- [x] **M-7.1: 5W1H Activity Logging (Platform A)**
+- [x] **Auto-Trigger Work Orders (G1→APH, G4→SANITASI)**
+- [ ] M-5.x: Workflow automation (status transitions - extended)
 - [ ] M-6.x: Notification system
-- [ ] M-7.x: Audit trail (log_aktivitas_5w1h)
 - [ ] M-8.x: Report generation
 
 ### **Phase 5: Production Ready** 🔜
@@ -520,6 +754,19 @@ For issues or questions:
 
 ---
 
-**Last Updated:** November 2025  
-**Version:** 1.0.0 (M-4.2 Complete)  
+**Last Updated:** November 6, 2025  
+**Version:** 1.1.0 (Platform A Integration Complete)  
 **Framework:** Master Priming Prompt (MPP) - 3P Principles
+
+**Recent Updates:**
+- ✅ Platform A: JWT Authentication for mobile workers
+- ✅ Platform A: GET /tugas/saya with pagination
+- ✅ Platform A: POST /log_aktivitas with 5W1H digital trail
+- ✅ Auto-Trigger: Work Order creation on G1/G4 status
+- ✅ Database: log_aktivitas_5w1h table schema
+- ✅ Testing: Automated test suite (test-full-auto.js)
+- ✅ Fixed: spk_tugas column ordering (removed created_at)
+
+**Commits:**
+- `3336a11` - Initial Platform A implementation (13 files, 2,276 insertions)
+- `bc1d11c` - Bug fixes + testing utilities (3 files, 202 insertions)
