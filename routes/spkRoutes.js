@@ -540,4 +540,362 @@ router.get('/daftar-tugas', async (req, res) => {
   }
 });
 
+// ============================================================
+// SUB-PROSES 2: ACTUATING & REPORTING (Platform A - Flutter)
+// ============================================================
+
+const { authenticateJWT } = require('../middleware/authMiddleware');
+
+/**
+ * GET /api/v1/spk/tugas/saya
+ * 
+ * TUJUAN: Dipanggil oleh Platform A (Flutter) untuk mengambil tugas pelaksana
+ * FITUR: Sub-Proses 2.1 - Mengambil Tugas (Sinkronisasi di Kantor)
+ * KEAMANAN: WAJIB JWT Authentication
+ * 
+ * AUTHENTICATION:
+ * - Header: "Authorization: Bearer <jwt_token>"
+ * - Token payload HARUS berisi: { id_pihak: "uuid-mandor-agus", ... }
+ * 
+ * QUERY PARAMETERS (Paginasi - WAJIB untuk Skalabilitas):
+ * - page: number (default: 1)
+ * - limit: number (default: 100, max: 500)
+ * - status: string (optional filter: 'BARU', 'DIKERJAKAN', atau 'BARU,DIKERJAKAN')
+ * 
+ * LOGIKA:
+ * 1. Ambil id_pelaksana dari JWT token (req.user.id_pihak) - JANGAN DARI QUERY PARAM
+ * 2. Query spk_tugas WHERE id_pelaksana = req.user.id_pihak
+ * 3. Filter hanya status 'BARU' atau 'DIKERJAKAN' (default)
+ * 4. Implementasi paginasi (offset/limit)
+ * 5. Return array tugas dengan metadata pagination
+ * 
+ * RESPONSE SUCCESS (200):
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "tugas": [
+ *       {
+ *         "id_tugas": "uuid-tugas-1",
+ *         "id_spk": "uuid-spk-parent",
+ *         "tipe_tugas": "VALIDASI_DRONE",
+ *         "status_tugas": "BARU",
+ *         "target_json": { "blok": "A1", "id_pohon": [...] },
+ *         "prioritas": 1,
+ *         "tanggal_dibuat": "2025-11-06T10:00:00Z"
+ *       },
+ *       ...
+ *     ],
+ *     "pagination": {
+ *       "page": 1,
+ *       "limit": 100,
+ *       "total_items": 250,
+ *       "total_pages": 3,
+ *       "has_next": true,
+ *       "has_prev": false
+ *     }
+ *   },
+ *   "message": "Ditemukan 100 tugas untuk pelaksana"
+ * }
+ * 
+ * ERROR RESPONSE (401):
+ * {
+ *   "success": false,
+ *   "error": "Unauthorized",
+ *   "message": "Token tidak ditemukan. Silakan login terlebih dahulu."
+ * }
+ * 
+ * CONTOH REQUEST:
+ * curl -X GET "http://localhost:3000/api/v1/spk/tugas/saya?page=1&limit=50&status=BARU" \
+ *   -H "Authorization: Bearer <jwt_token>"
+ */
+router.get('/tugas/saya', authenticateJWT, async (req, res) => {
+  try {
+    // Prinsip KEAMANAN: Ambil id_pelaksana dari JWT (BUKAN dari query param!)
+    const id_pelaksana = req.user.id_pihak;
+    
+    // Prinsip SKALABILITAS: Parsing pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    let limit = parseInt(req.query.limit) || 100;
+    
+    // Validasi pagination
+    if (page < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid page',
+        message: 'Parameter "page" harus >= 1'
+      });
+    }
+    
+    // Batasi max limit untuk performa
+    if (limit < 1 || limit > 500) {
+      limit = 100; // Default jika invalid
+    }
+    
+    // Parsing status filter (optional)
+    let statusFilter = req.query.status 
+      ? req.query.status.split(',').map(s => s.trim().toUpperCase())
+      : ['BARU', 'DIKERJAKAN']; // Default: hanya BARU & DIKERJAKAN
+    
+    // Validasi status (hanya allow 'BARU', 'DIKERJAKAN', 'SELESAI')
+    const validStatuses = ['BARU', 'DIKERJAKAN', 'SELESAI'];
+    statusFilter = statusFilter.filter(s => validStatuses.includes(s));
+    
+    if (statusFilter.length === 0) {
+      statusFilter = ['BARU', 'DIKERJAKAN']; // Fallback
+    }
+    
+    console.log('📱 [Platform A] GET Tugas Saya');
+    console.log('   Pelaksana:', id_pelaksana);
+    console.log('   Page:', page, 'Limit:', limit);
+    console.log('   Status Filter:', statusFilter);
+    
+    // Call service layer
+    const result = await spkService.getTugasSaya(id_pelaksana, {
+      page,
+      limit,
+      status: statusFilter
+    });
+    
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: `Ditemukan ${result.tugas.length} tugas untuk pelaksana`
+    });
+    
+  } catch (error) {
+    console.error('❌ [API Error] GET /api/v1/spk/tugas/saya:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Gagal mengambil daftar tugas'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/log_aktivitas
+ * 
+ * TUJUAN: Dipanggil oleh Platform A (Flutter) untuk upload Jejak Digital 5W1H
+ * FITUR: Sub-Proses 2.1, 2.3, 2.4 - Melaporkan Hasil Eksekusi Tugas
+ * KEAMANAN: WAJIB JWT Authentication
+ * 
+ * INI ADALAH API PALING PENTING UNTUK DASHBOARD!
+ * 
+ * AUTHENTICATION:
+ * - Header: "Authorization: Bearer <jwt_token>"
+ * - Token payload HARUS berisi: { id_pihak: "uuid-mandor-agus", ... }
+ * 
+ * REQUEST BODY (Batch Upload):
+ * {
+ *   "log_aktivitas": [
+ *     {
+ *       "id_tugas": "uuid-tugas-1",
+ *       "id_npokok": "uuid-pohon-123",
+ *       "timestamp_eksekusi": "2025-11-06T14:30:00Z",  // ISO 8601
+ *       "gps_eksekusi": { "lat": -6.1234, "lon": 106.5678 },  // JSONB
+ *       "hasil_json": {
+ *         "status_aktual": "G1",  // G1, G2, G3, G4 (untuk Validasi)
+ *         "tipe_kejadian": "VALIDASI_DRONE",
+ *         "keterangan": "Pohon sakit berat, perlu APH segera"
+ *       }
+ *     },
+ *     ...
+ *   ]
+ * }
+ * 
+ * LOGIKA (Prinsip TEPAT - WAJIB):
+ * 1. Ambil id_petugas (WHO) dari JWT token - JANGAN PERCAYA INPUT BODY
+ * 2. Validasi server-side untuk SETIAP log dalam array:
+ *    - id_tugas exist di spk_tugas
+ *    - id_npokok valid (optional jika ada tabel master_pohon)
+ *    - timestamp_eksekusi valid ISO 8601
+ *    - gps_eksekusi valid lat/lon
+ *    - hasil_json valid structure
+ * 3. Batch INSERT ke tabel log_aktivitas_5w1h
+ * 4. AUTO-TRIGGER (WAJIB):
+ *    a. Update status_tugas di spk_tugas (misal: BARU -> DIKERJAKAN)
+ *    b. Jika hasil_json.status_aktual = 'G1' atau 'G4':
+ *       -> AUTO-CREATE Work Order baru untuk APH/Sanitasi (Tugas 2.2)
+ * 5. Return summary hasil upload
+ * 
+ * RESPONSE SUCCESS (201):
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "log_diterima": 15,
+ *     "log_berhasil": 15,
+ *     "log_gagal": 0,
+ *     "auto_trigger": {
+ *       "work_order_created": 3,  // Jumlah WO APH/Sanitasi yang di-create
+ *       "tugas_updated": 15       // Jumlah status tugas yang di-update
+ *     }
+ *   },
+ *   "message": "15 log aktivitas berhasil diupload, 3 work order baru dibuat"
+ * }
+ * 
+ * RESPONSE PARTIAL SUCCESS (207 - Multi-Status):
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "log_diterima": 20,
+ *     "log_berhasil": 18,
+ *     "log_gagal": 2,
+ *     "errors": [
+ *       { "index": 5, "error": "id_tugas tidak ditemukan" },
+ *       { "index": 12, "error": "timestamp_eksekusi invalid" }
+ *     ],
+ *     "auto_trigger": { ... }
+ *   },
+ *   "message": "18/20 log berhasil diupload, 2 log gagal validasi"
+ * }
+ * 
+ * ERROR RESPONSE (401):
+ * {
+ *   "success": false,
+ *   "error": "Unauthorized",
+ *   "message": "Token tidak ditemukan"
+ * }
+ * 
+ * CONTOH REQUEST:
+ * curl -X POST http://localhost:3000/api/v1/log_aktivitas \
+ *   -H "Authorization: Bearer <jwt_token>" \
+ *   -H "Content-Type: application/json" \
+ *   -d '{
+ *     "log_aktivitas": [
+ *       {
+ *         "id_tugas": "uuid-tugas-1",
+ *         "id_npokok": "uuid-pohon-123",
+ *         "timestamp_eksekusi": "2025-11-06T14:30:00Z",
+ *         "gps_eksekusi": {"lat": -6.1234, "lon": 106.5678},
+ *         "hasil_json": {"status_aktual": "G1", "keterangan": "..."}
+ *       }
+ *     ]
+ *   }'
+ */
+router.post('/log_aktivitas', authenticateJWT, async (req, res) => {
+  try {
+    // Prinsip KEAMANAN: Ambil id_petugas (WHO) dari JWT - JANGAN PERCAYA INPUT BODY
+    const id_petugas = req.user.id_pihak;
+    
+    // 1. Validasi request body - harus ada array 'log_aktivitas'
+    const { log_aktivitas } = req.body;
+    
+    if (!log_aktivitas || !Array.isArray(log_aktivitas)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request body',
+        message: 'Request body harus berisi array "log_aktivitas"'
+      });
+    }
+    
+    if (log_aktivitas.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Empty array',
+        message: 'Array log_aktivitas tidak boleh kosong (minimal 1 log)'
+      });
+    }
+    
+    // Prinsip SKALABILITAS: Batasi jumlah log per batch
+    if (log_aktivitas.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        error: 'Too many logs',
+        message: 'Maksimal 1000 log per batch (untuk performa)'
+      });
+    }
+    
+    console.log('📱 [Platform A] POST Log Aktivitas 5W1H');
+    console.log('   Petugas (WHO):', id_petugas);
+    console.log('   Jumlah Log:', log_aktivitas.length);
+    
+    // 2. Validasi basic structure setiap log
+    const requiredFields = ['id_tugas', 'id_npokok', 'timestamp_eksekusi', 'gps_eksekusi', 'hasil_json'];
+    const validationErrors = [];
+    
+    log_aktivitas.forEach((log, index) => {
+      // Cek required fields
+      requiredFields.forEach(field => {
+        if (!log[field]) {
+          validationErrors.push({
+            index: index,
+            field: field,
+            message: `Log ke-${index + 1}: Field ${field} wajib diisi`
+          });
+        }
+      });
+      
+      // Validasi timestamp format (ISO 8601)
+      if (log.timestamp_eksekusi) {
+        const timestamp = new Date(log.timestamp_eksekusi);
+        if (isNaN(timestamp.getTime())) {
+          validationErrors.push({
+            index: index,
+            field: 'timestamp_eksekusi',
+            message: `Log ke-${index + 1}: Format timestamp harus ISO 8601 (YYYY-MM-DDTHH:mm:ssZ)`
+          });
+        }
+      }
+      
+      // Validasi gps_eksekusi (harus object dengan lat & lon)
+      if (log.gps_eksekusi) {
+        if (typeof log.gps_eksekusi !== 'object' || !log.gps_eksekusi.lat || !log.gps_eksekusi.lon) {
+          validationErrors.push({
+            index: index,
+            field: 'gps_eksekusi',
+            message: `Log ke-${index + 1}: gps_eksekusi harus object dengan property "lat" dan "lon"`
+          });
+        }
+      }
+      
+      // Validasi hasil_json (harus object)
+      if (log.hasil_json && typeof log.hasil_json !== 'object') {
+        validationErrors.push({
+          index: index,
+          field: 'hasil_json',
+          message: `Log ke-${index + 1}: hasil_json harus berupa object`
+        });
+      }
+    });
+    
+    // Jika ada error validasi, return 400
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        errors: validationErrors,
+        message: `Validasi gagal pada ${validationErrors.length} log`
+      });
+    }
+    
+    // 3. Call service layer untuk batch insert + auto-trigger
+    const result = await spkService.uploadLogAktivitas5W1H(id_petugas, log_aktivitas);
+    
+    // 4. Return response dengan status code yang sesuai
+    if (result.log_gagal > 0) {
+      // Partial success - ada beberapa log yang gagal
+      return res.status(207).json({
+        success: true,
+        data: result,
+        message: `${result.log_berhasil}/${result.log_diterima} log berhasil diupload, ${result.log_gagal} log gagal`
+      });
+    } else {
+      // Full success
+      return res.status(201).json({
+        success: true,
+        data: result,
+        message: `${result.log_berhasil} log aktivitas berhasil diupload${result.auto_trigger.work_order_created > 0 ? `, ${result.auto_trigger.work_order_created} work order baru dibuat` : ''}`
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ [API Error] POST /api/v1/log_aktivitas:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Gagal mengupload log aktivitas'
+    });
+  }
+});
+
 module.exports = router;

@@ -369,6 +369,385 @@ async function getDaftarTugas(filters) {
 }
 
 // ============================================================
+// SUB-PROSES 2: ACTUATING & REPORTING (Platform A)
+// ============================================================
+
+/**
+ * Get Tugas Saya (untuk Pelaksana/Mandor)
+ * 
+ * TUJUAN: Dipanggil oleh Platform A (Flutter) saat sinkronisasi di kantor
+ * FITUR: Sub-Proses 2.1 - Mengambil Tugas
+ * KEAMANAN: id_pelaksana dari JWT token (req.user.id_pihak)
+ * 
+ * INPUT:
+ * - id_pelaksana: string (UUID dari JWT token)
+ * - options: {
+ *     page: number (default: 1),
+ *     limit: number (default: 100),
+ *     status: array of string (default: ['BARU', 'DIKERJAKAN'])
+ *   }
+ * 
+ * OUTPUT:
+ * {
+ *   tugas: array of tugas objects,
+ *   pagination: {
+ *     page: number,
+ *     limit: number,
+ *     total_items: number,
+ *     total_pages: number,
+ *     has_next: boolean,
+ *     has_prev: boolean
+ *   }
+ * }
+ * 
+ * PRINSIP MPP:
+ * - SIMPLE: Query straightforward dengan pagination
+ * - TEPAT: id_pelaksana dari JWT (trusted), bukan dari query param
+ * - SKALABILITAS: Pagination wajib untuk handle ribuan tugas
+ */
+async function getTugasSaya(id_pelaksana, options = {}) {
+  try {
+    console.log('📱 [Service] Get Tugas Saya...');
+    console.log('   ID Pelaksana:', id_pelaksana);
+    console.log('   Options:', JSON.stringify(options, null, 2));
+    
+    // Default options
+    const page = options.page || 1;
+    const limit = options.limit || 100;
+    const statusFilter = options.status || ['BARU', 'DIKERJAKAN'];
+    
+    // Calculate offset untuk pagination
+    const offset = (page - 1) * limit;
+    
+    // Prinsip TEPAT: Validasi pelaksana exist
+    const { data: pelaksanaExists, error: checkError } = await supabase
+      .from('master_pihak')
+      .select('id_pihak, nama_pihak, role')
+      .eq('id_pihak', id_pelaksana)
+      .single();
+    
+    if (checkError || !pelaksanaExists) {
+      throw new Error(`ID Pelaksana '${id_pelaksana}' tidak ditemukan di master_pihak`);
+    }
+    
+    console.log('✅ Pelaksana valid:', pelaksanaExists.nama_pihak, '(' + pelaksanaExists.role + ')');
+    
+    // Query tugas dengan pagination
+    // Prinsip SKALABILITAS: Use range() untuk pagination
+    const { data: tugasData, error: tugasError, count } = await supabase
+      .from('spk_tugas')
+      .select('*', { count: 'exact' }) // count untuk total items
+      .eq('id_pelaksana', id_pelaksana)
+      .in('status_tugas', statusFilter)
+      .order('prioritas', { ascending: true }) // Order by prioritas (1=Tinggi first)
+      .order('tanggal_dibuat', { ascending: false }) // Then by newest
+      .range(offset, offset + limit - 1); // Pagination
+    
+    if (tugasError) {
+      console.error('❌ [Service] Supabase query error:', tugasError);
+      throw new Error(`Gagal query tugas: ${tugasError.message}`);
+    }
+    
+    const tugas = tugasData || [];
+    const totalItems = count || 0;
+    const totalPages = Math.ceil(totalItems / limit);
+    
+    console.log('✅ [Service] Query berhasil');
+    console.log('   Tugas ditemukan:', tugas.length);
+    console.log('   Total items:', totalItems);
+    console.log('   Total pages:', totalPages);
+    
+    // Parse target_json (jika string, convert ke object)
+    const tugasParsed = tugas.map(t => ({
+      ...t,
+      target_json: typeof t.target_json === 'string' 
+        ? JSON.parse(t.target_json) 
+        : t.target_json
+    }));
+    
+    // Return dengan metadata pagination
+    return {
+      tugas: tugasParsed,
+      pagination: {
+        page: page,
+        limit: limit,
+        total_items: totalItems,
+        total_pages: totalPages,
+        has_next: page < totalPages,
+        has_prev: page > 1
+      }
+    };
+    
+  } catch (err) {
+    console.error('❌ [Service] Error in getTugasSaya:', err.message);
+    throw err;
+  }
+}
+
+/**
+ * Upload Log Aktivitas 5W1H (Batch)
+ * 
+ * TUJUAN: Dipanggil oleh Platform A (Flutter) untuk upload Jejak Digital
+ * FITUR: Sub-Proses 2.1, 2.3, 2.4 - Melaporkan Hasil Eksekusi
+ * 
+ * INI ADALAH FUNCTION PALING KOMPLEKS & PENTING!
+ * 
+ * INPUT:
+ * - id_petugas: string (UUID dari JWT token - WHO)
+ * - arrayLog: array of log objects
+ *   [
+ *     {
+ *       id_tugas: string (WHAT),
+ *       id_npokok: string (WHERE - pohon),
+ *       timestamp_eksekusi: string (WHEN - ISO 8601),
+ *       gps_eksekusi: object (WHERE - lat/lon),
+ *       hasil_json: object (HOW - results)
+ *     }
+ *   ]
+ * 
+ * OUTPUT:
+ * {
+ *   log_diterima: number,
+ *   log_berhasil: number,
+ *   log_gagal: number,
+ *   errors: array (jika ada),
+ *   auto_trigger: {
+ *     work_order_created: number,
+ *     tugas_updated: number
+ *   }
+ * }
+ * 
+ * PRINSIP MPP:
+ * - SIMPLE: Batch insert log_aktivitas_5w1h
+ * - TEPAT: 
+ *   - Validasi FK (id_tugas exist)
+ *   - id_petugas dari JWT (JANGAN PERCAYA INPUT)
+ *   - Timestamp server (bukan dari HP untuk created_at)
+ * - PENINGKATAN BERTAHAB: 
+ *   - Auto-update status_tugas
+ *   - Auto-trigger Work Order baru (APH/Sanitasi) jika status_aktual = 'G1' atau 'G4'
+ * 
+ * VALIDASI BISNIS:
+ * 1. Setiap id_tugas harus exist di spk_tugas
+ * 2. timestamp_eksekusi harus valid ISO 8601
+ * 3. gps_eksekusi harus valid lat/lon
+ * 4. hasil_json harus valid JSON
+ * 
+ * AUTO-TRIGGER (KRUSIAL):
+ * 1. Setelah INSERT log, update status_tugas:
+ *    - Jika log pertama untuk tugas ini: BARU -> DIKERJAKAN
+ *    - Jika semua pohon selesai: DIKERJAKAN -> SELESAI
+ * 2. Jika hasil_json.status_aktual = 'G1' atau 'G4':
+ *    - CREATE Work Order baru untuk APH/Sanitasi
+ *    - Link ke SPK parent yang sama
+ */
+async function uploadLogAktivitas5W1H(id_petugas, arrayLog) {
+  try {
+    console.log('📱 [Service] Upload Log Aktivitas 5W1H...');
+    console.log('   ID Petugas (WHO):', id_petugas);
+    console.log('   Jumlah Log:', arrayLog.length);
+    
+    // Prinsip TEPAT: Validasi petugas exist
+    const { data: petugasExists, error: checkError } = await supabase
+      .from('master_pihak')
+      .select('id_pihak, nama_pihak')
+      .eq('id_pihak', id_petugas)
+      .single();
+    
+    if (checkError || !petugasExists) {
+      throw new Error(`ID Petugas '${id_petugas}' tidak ditemukan di master_pihak`);
+    }
+    
+    console.log('✅ Petugas valid:', petugasExists.nama_pihak);
+    
+    // Prepare untuk collect results
+    const logBerhasil = [];
+    const logGagal = [];
+    const tugasUpdated = new Set(); // Track tugas yang sudah di-update statusnya
+    const workOrdersToCreate = []; // Track WO yang perlu di-create
+    
+    // Prinsip TEPAT: Validasi FK untuk semua id_tugas dulu (batch check)
+    const uniqueTugasIds = [...new Set(arrayLog.map(log => log.id_tugas))];
+    console.log('🔍 Validasi ID Tugas:', uniqueTugasIds.length, 'unique');
+    
+    const { data: tugasData, error: tugasError } = await supabase
+      .from('spk_tugas')
+      .select('id_tugas, id_spk, tipe_tugas, status_tugas')
+      .in('id_tugas', uniqueTugasIds);
+    
+    if (tugasError) {
+      throw new Error(`Gagal validasi ID Tugas: ${tugasError.message}`);
+    }
+    
+    // Create lookup map untuk faster check
+    const tugasLookup = {};
+    tugasData.forEach(t => {
+      tugasLookup[t.id_tugas] = t;
+    });
+    
+    // Prepare data untuk batch insert
+    const logsToInsert = [];
+    
+    arrayLog.forEach((log, index) => {
+      try {
+        // Validasi: id_tugas exist?
+        if (!tugasLookup[log.id_tugas]) {
+          logGagal.push({
+            index: index,
+            error: `id_tugas '${log.id_tugas}' tidak ditemukan`
+          });
+          return; // Skip log ini
+        }
+        
+        // Sanitasi dan prepare data
+        const logData = {
+          id_tugas: log.id_tugas.trim(),
+          id_npokok: log.id_npokok.trim(),
+          id_petugas: id_petugas, // WHO dari JWT (TRUSTED)
+          timestamp_eksekusi: log.timestamp_eksekusi, // WHEN dari HP
+          // created_at akan auto-filled oleh database (WHEN di server)
+          gps_eksekusi: typeof log.gps_eksekusi === 'string' 
+            ? log.gps_eksekusi 
+            : JSON.stringify(log.gps_eksekusi), // WHERE
+          hasil_json: typeof log.hasil_json === 'string' 
+            ? log.hasil_json 
+            : JSON.stringify(log.hasil_json) // HOW
+        };
+        
+        logsToInsert.push(logData);
+        
+        // Prinsip PENINGKATAN BERTAHAB: Check untuk auto-trigger
+        const hasilObj = typeof log.hasil_json === 'string' 
+          ? JSON.parse(log.hasil_json) 
+          : log.hasil_json;
+        
+        // Auto-trigger Work Order jika status_aktual = 'G1' atau 'G4'
+        if (hasilObj.status_aktual === 'G1' || hasilObj.status_aktual === 'G4') {
+          const tugasInfo = tugasLookup[log.id_tugas];
+          
+          workOrdersToCreate.push({
+            id_spk: tugasInfo.id_spk, // Link ke SPK parent yang sama
+            id_pelaksana: id_petugas, // Assign ke petugas yang sama (atau bisa custom)
+            tipe_tugas: hasilObj.status_aktual === 'G1' ? 'APH' : 'SANITASI',
+            target_json: {
+              id_npokok: log.id_npokok,
+              blok: hasilObj.blok || 'Unknown',
+              triggered_by: log.id_tugas,
+              alasan: `Auto-trigger dari validasi: ${hasilObj.status_aktual} - ${hasilObj.keterangan || 'N/A'}`
+            },
+            prioritas: 1, // High priority untuk follow-up
+            catatan: `Auto-generated dari log validasi (status: ${hasilObj.status_aktual})`
+          });
+        }
+        
+        // Track tugas untuk status update
+        tugasUpdated.add(log.id_tugas);
+        
+      } catch (err) {
+        logGagal.push({
+          index: index,
+          error: err.message
+        });
+      }
+    });
+    
+    console.log('📦 Prepared logs:', logsToInsert.length, 'valid');
+    console.log('⚙️  Auto-trigger WO:', workOrdersToCreate.length);
+    
+    // BATCH INSERT log_aktivitas_5w1h
+    let insertedCount = 0;
+    if (logsToInsert.length > 0) {
+      const { data: insertedLogs, error: insertError } = await supabase
+        .from('log_aktivitas_5w1h')
+        .insert(logsToInsert)
+        .select();
+      
+      if (insertError) {
+        console.error('❌ [Service] Supabase INSERT error:', insertError);
+        // Jangan throw, karena mungkin sebagian berhasil
+        // Log error tapi lanjutkan
+        logGagal.push({
+          index: -1,
+          error: `Batch insert failed: ${insertError.message}`
+        });
+      } else {
+        insertedCount = insertedLogs ? insertedLogs.length : 0;
+        console.log('✅ [Service] Batch insert log berhasil:', insertedCount);
+      }
+    }
+    
+    // AUTO-TRIGGER 1: Update status_tugas
+    let tugasUpdatedCount = 0;
+    for (const id_tugas of tugasUpdated) {
+      try {
+        const tugasInfo = tugasLookup[id_tugas];
+        
+        // Logika update status:
+        // - Jika status_tugas = 'BARU' -> update ke 'DIKERJAKAN'
+        // - Jika semua log untuk tugas ini sudah ada -> update ke 'SELESAI'
+        // (Untuk simplicity, kita update ke DIKERJAKAN dulu)
+        
+        if (tugasInfo.status_tugas === 'BARU') {
+          const { error: updateError } = await supabase
+            .from('spk_tugas')
+            .update({ status_tugas: 'DIKERJAKAN' })
+            .eq('id_tugas', id_tugas);
+          
+          if (!updateError) {
+            tugasUpdatedCount++;
+            console.log('✅ Status tugas updated:', id_tugas, 'BARU -> DIKERJAKAN');
+          }
+        }
+      } catch (err) {
+        console.error('⚠️  Warning: Gagal update status tugas', id_tugas, ':', err.message);
+        // Jangan throw, lanjutkan
+      }
+    }
+    
+    // AUTO-TRIGGER 2: Create Work Order baru (APH/Sanitasi)
+    let workOrderCreatedCount = 0;
+    if (workOrdersToCreate.length > 0) {
+      console.log('🔧 Creating', workOrdersToCreate.length, 'auto-triggered Work Orders...');
+      
+      const { data: createdWO, error: woError } = await supabase
+        .from('spk_tugas')
+        .insert(workOrdersToCreate)
+        .select();
+      
+      if (woError) {
+        console.error('⚠️  Warning: Gagal create Work Orders:', woError.message);
+        // Jangan throw, ini optional
+      } else {
+        workOrderCreatedCount = createdWO ? createdWO.length : 0;
+        console.log('✅ Work Orders created:', workOrderCreatedCount);
+      }
+    }
+    
+    console.log('✅ [Service] Upload Log Aktivitas selesai!');
+    console.log('   Log berhasil:', insertedCount);
+    console.log('   Log gagal:', logGagal.length);
+    console.log('   Tugas updated:', tugasUpdatedCount);
+    console.log('   Work Order created:', workOrderCreatedCount);
+    
+    // Return summary
+    return {
+      log_diterima: arrayLog.length,
+      log_berhasil: insertedCount,
+      log_gagal: logGagal.length,
+      errors: logGagal.length > 0 ? logGagal : undefined,
+      auto_trigger: {
+        work_order_created: workOrderCreatedCount,
+        tugas_updated: tugasUpdatedCount
+      }
+    };
+    
+  } catch (err) {
+    console.error('❌ [Service] Error in uploadLogAktivitas5W1H:', err.message);
+    throw err;
+  }
+}
+
+// ============================================================
 // HELPER FUNCTIONS (PLACEHOLDER)
 // ============================================================
 
@@ -410,6 +789,8 @@ async function insertLogAktivitas5W1H(data) {
 module.exports = {
   createSpkHeader,
   addTugasKeSpk,
+  getTugasSaya,
+  uploadLogAktivitas5W1H,
   createWorkOrder,
   laporValidasi,
   laporAph,
