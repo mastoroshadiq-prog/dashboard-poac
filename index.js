@@ -18,6 +18,7 @@ const cors = require('cors');
 const { supabase, testConnection } = require('./config/supabase');
 
 // 3. Import routes
+const authRoutes = require('./routes/authRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const spkRoutes = require('./routes/spkRoutes');
 
@@ -67,6 +68,7 @@ app.get('/health', async (req, res) => {
 });
 
 // API v1 Routes
+app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/spk', spkRoutes);
 
@@ -110,7 +112,12 @@ app.listen(PORT, async () => {
   console.log('   GET  /                                 - API Info');
   console.log('   GET  /health                           - Health Check');
   console.log('');
-  console.log('   📊 DASHBOARD (READ) - 🔐 JWT Required:');
+  console.log('   � AUTHENTICATION (RBAC FASE 3) - NEW!:');
+  console.log('   POST /api/v1/auth/login                - Login & Get JWT Token 🆕');
+  console.log('   POST /api/v1/auth/refresh              - Refresh Token (future)');
+  console.log('   POST /api/v1/auth/logout               - Logout (future)');
+  console.log('');
+  console.log('   �📊 DASHBOARD (READ) - 🔐 JWT Required:');
   console.log('   GET  /api/v1/dashboard/kpi-eksekutif   - KPI Eksekutif (M-1.1) 🔐');
   console.log('   GET  /api/v1/dashboard/operasional     - Dashboard Operasional (M-1.2) 🔐');
   console.log('   GET  /api/v1/dashboard/teknis          - Dashboard Teknis (M-1.3) 🔐');
@@ -120,10 +127,10 @@ app.listen(PORT, async () => {
   console.log('   POST /api/v1/spk/:id_spk/tugas         - Tambah Tugas ke SPK ✅ M-4.2 🔐');
   console.log('');
   console.log('   📱 SPK - ACTUATING (Platform A) - 🔐 JWT Required:');
-  console.log('   GET  /api/v1/spk/tugas/saya            - Ambil Tugas Saya 🔐 NEW!');
-  console.log('   POST /api/v1/spk/log_aktivitas         - Upload Log 5W1H + Auto-Trigger 🔐 NEW!');
+  console.log('   GET  /api/v1/spk/tugas/saya            - Ambil Tugas Saya 🔐');
+  console.log('   POST /api/v1/spk/log_aktivitas         - Upload Log 5W1H + Auto-Trigger 🔐');
   console.log('');
-  console.log('   🔐 RBAC FASE 1 & 2: All endpoints protected (100% coverage)');
+  console.log('   🔐 RBAC FASE 1, 2, 3: All endpoints protected (100% coverage)');
   console.log('   🔧 Auto-Trigger: Work Order APH/Sanitasi (status G1/G4)');
   console.log('='.repeat(60));
 });

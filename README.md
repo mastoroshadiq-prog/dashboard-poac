@@ -95,6 +95,65 @@ node index.js
 
 ### **Base URL:** `http://localhost:3000/api/v1`
 
+### **🔐 Authentication (RBAC FASE 3)** 🆕
+
+| Endpoint | Method | Auth | Description | Status |
+|----------|--------|------|-------------|--------|
+| `/auth/login` | POST | None | Login & Generate JWT Token | ✅ 🆕 |
+| `/auth/refresh` | POST | JWT | Refresh Token (future) | ⏳ Planned |
+| `/auth/logout` | POST | JWT | Logout & Invalidate Token (future) | ⏳ Planned |
+
+**Login Request:**
+```json
+{
+  "username": "asisten001",
+  "password": "asisten123"
+}
+```
+
+**Login Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id_pihak": "22222222-2222-2222-2222-222222222222",
+      "nama_pihak": "Asisten Kebun Utama",
+      "role": "ASISTEN",
+      "username": "asisten001"
+    },
+    "expires_in": "7d",
+    "expires_at": "2025-11-14T..."
+  },
+  "message": "Login berhasil"
+}
+```
+
+**Example:**
+```bash
+# PowerShell - Login
+$body = @{
+  username = "asisten001"
+  password = "asisten123"
+} | ConvertTo-Json
+
+$response = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/auth/login" `
+  -Method POST `
+  -Body $body `
+  -ContentType "application/json"
+
+$token = $response.data.token
+Write-Host "Token: $token"
+
+# cURL - Login
+curl -X POST http://localhost:3000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"asisten001","password":"asisten123"}'
+```
+
+---
+
 ### **Dashboard KPI (READ/OUTPUT)** 🔐 ✅
 
 | Endpoint | Method | Auth | Roles | Description | Status |
