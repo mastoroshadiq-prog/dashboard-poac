@@ -12,8 +12,14 @@ const dashboardService = require('../services/dashboardService');
 const operasionalService = require('../services/operasionalService');
 const teknisService = require('../services/teknisService');
 
+// 🔐 RBAC FASE 2: Authentication & Authorization Middleware
+const { authenticateJWT, authorizeRole } = require('../middleware/authMiddleware');
+
 /**
  * GET /api/v1/dashboard/kpi_eksekutif
+ * 
+ * 🔐 RBAC FASE 2: Requires JWT + Role Authorization
+ * ALLOWED ROLES: ASISTEN, ADMIN (Eksekutif level only)
  * 
  * TUJUAN: Mengisi Dashboard Tampilan 1 (Eksekutif) - Fitur M-1.1 & M-1.2
  * 
@@ -48,9 +54,15 @@ const teknisService = require('../services/teknisService');
  * 
  * CONTOH REQUEST:
  * GET /api/v1/dashboard/kpi_eksekutif
+ * Authorization: Bearer <jwt-token>
+ * 
  * GET /api/v1/dashboard/kpi_eksekutif?estate=EST001
+ * Authorization: Bearer <jwt-token>
  */
-router.get('/kpi_eksekutif', async (req, res) => {
+router.get('/kpi_eksekutif', 
+  authenticateJWT, 
+  authorizeRole(['ASISTEN', 'ADMIN']), 
+  async (req, res) => {
   try {
     // Prinsip KEAMANAN: Validasi server-side untuk query parameters
     const filters = {};
@@ -118,6 +130,9 @@ router.get('/kpi_eksekutif', async (req, res) => {
 /**
  * GET /api/v1/dashboard/operasional
  * 
+ * 🔐 RBAC FASE 2: Requires JWT + Role Authorization
+ * ALLOWED ROLES: MANDOR, ASISTEN, ADMIN (Operational + Eksekutif level)
+ * 
  * TUJUAN: Mengisi Dashboard Tampilan 2 (Operasional) - Fitur M-2.1 & M-2.2
  * 
  * QUERY PARAMETERS (Optional):
@@ -160,9 +175,15 @@ router.get('/kpi_eksekutif', async (req, res) => {
  * 
  * CONTOH REQUEST:
  * GET /api/v1/dashboard/operasional
+ * Authorization: Bearer <jwt-token>
+ * 
  * GET /api/v1/dashboard/operasional?divisi=DIV001
+ * Authorization: Bearer <jwt-token>
  */
-router.get('/operasional', async (req, res) => {
+router.get('/operasional', 
+  authenticateJWT, 
+  authorizeRole(['MANDOR', 'ASISTEN', 'ADMIN']), 
+  async (req, res) => {
   try {
     // Prinsip KEAMANAN: Validasi server-side untuk query parameters
     const filters = {};
@@ -230,6 +251,9 @@ router.get('/operasional', async (req, res) => {
 /**
  * GET /api/v1/dashboard/teknis
  * 
+ * 🔐 RBAC FASE 2: Requires JWT + Role Authorization
+ * ALLOWED ROLES: MANDOR, ASISTEN, ADMIN (Technical + Eksekutif level)
+ * 
  * TUJUAN: Mengisi Dashboard Tampilan 3 (Teknis) - Fitur M-3.1 & M-3.2
  * 
  * QUERY PARAMETERS (Optional):
@@ -266,9 +290,15 @@ router.get('/operasional', async (req, res) => {
  * 
  * CONTOH REQUEST:
  * GET /api/v1/dashboard/teknis
+ * Authorization: Bearer <jwt-token>
+ * 
  * GET /api/v1/dashboard/teknis?umh=UMH001
+ * Authorization: Bearer <jwt-token>
  */
-router.get('/teknis', async (req, res) => {
+router.get('/teknis', 
+  authenticateJWT, 
+  authorizeRole(['MANDOR', 'ASISTEN', 'ADMIN']), 
+  async (req, res) => {
   try {
     // Prinsip KEAMANAN: Validasi server-side untuk query parameters
     const filters = {};

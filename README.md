@@ -95,26 +95,40 @@ node index.js
 
 ### **Base URL:** `http://localhost:3000/api/v1`
 
-### **Dashboard KPI (READ/OUTPUT)** ✅
+### **Dashboard KPI (READ/OUTPUT)** 🔐 ✅
 
-| Endpoint | Method | Description | Status |
-|----------|--------|-------------|--------|
-| `/dashboard/kpi-eksekutif` | GET | KPI Eksekutif (HPH, Produktivitas, Kualitas) | ✅ M-1.1 |
-| `/dashboard/operasional` | GET | Dashboard Operasional (SPK, Tugas, Progres) | ✅ M-1.2 |
-| `/dashboard/teknis` | GET | Dashboard Teknis (Peta, Target, Realisasi) | ✅ M-1.3 |
+| Endpoint | Method | Auth | Roles | Description | Status |
+|----------|--------|------|-------|-------------|--------|
+| `/dashboard/kpi-eksekutif` | GET | JWT | ASISTEN, ADMIN | KPI Eksekutif (HPH, Produktivitas, Kualitas) | ✅ M-1.1 🔐 |
+| `/dashboard/operasional` | GET | JWT | MANDOR, ASISTEN, ADMIN | Dashboard Operasional (SPK, Tugas, Progres) | ✅ M-1.2 🔐 |
+| `/dashboard/teknis` | GET | JWT | MANDOR, ASISTEN, ADMIN | Dashboard Teknis (Peta, Target, Realisasi) | ✅ M-1.3 🔐 |
+
+**🔐 RBAC FASE 2 (NEW!):**
+- **Authentication:** JWT Required (Bearer token in Authorization header)
+- **Authorization:** Role-based access control enforced
+- **Dashboard KPI Eksekutif:** Only ASISTEN and ADMIN (executive level)
+- **Dashboard Operasional & Teknis:** MANDOR, ASISTEN, ADMIN (operational + executive)
+
+**⚠️ BREAKING CHANGES (Nov 7, 2025):**
+- All Dashboard endpoints now require JWT authentication
+- PELAKSANA role cannot access any Dashboard (403 Forbidden)
+- Unauthorized requests return 401, forbidden requests return 403
 
 **Example:**
 ```bash
-# PowerShell - Dashboard
-Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" -Method GET | ConvertTo-Json -Depth 10
+# PowerShell - Dashboard (NOW REQUIRES JWT)
+$token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."  # ASISTEN or ADMIN token
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" `
+  -Headers @{Authorization="Bearer $token"} | ConvertTo-Json -Depth 10
 
 # PowerShell - Platform A (with JWT)
 $token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/tugas/saya" `
   -Headers @{Authorization="Bearer $token"} | ConvertTo-Json -Depth 5
 
-# cURL - Dashboard
-curl -X GET http://localhost:3000/api/v1/dashboard/kpi-eksekutif
+# cURL - Dashboard (NOW REQUIRES JWT)
+curl -X GET http://localhost:3000/api/v1/dashboard/kpi-eksekutif \
+  -H "Authorization: Bearer <your-jwt-token>"
 
 # cURL - Platform A
 curl -X GET http://localhost:3000/api/v1/spk/tugas/saya \
@@ -488,8 +502,14 @@ VIEWER        → Read-only access (future implementation)
 
 | Endpoint | Method | Allowed Roles | Description |
 |----------|--------|---------------|-------------|
+| **Dashboard Endpoints (RBAC FASE 2)** | | | |
+| `/api/v1/dashboard/kpi-eksekutif` | GET | `ASISTEN`, `ADMIN` | View Executive KPI Dashboard |
+| `/api/v1/dashboard/operasional` | GET | `MANDOR`, `ASISTEN`, `ADMIN` | View Operational Dashboard |
+| `/api/v1/dashboard/teknis` | GET | `MANDOR`, `ASISTEN`, `ADMIN` | View Technical Dashboard |
+| **SPK Management (RBAC FASE 1)** | | | |
 | `/api/v1/spk/` | POST | `ASISTEN`, `ADMIN` | Create SPK Header |
 | `/api/v1/spk/:id/tugas` | POST | `ASISTEN`, `MANDOR`, `ADMIN` | Add Tasks to SPK |
+| **Platform A - Mobile Workers (RBAC FASE 1)** | | | |
 | `/api/v1/spk/tugas/saya` | GET | `PELAKSANA`, `MANDOR`, `ADMIN` | Get My Tasks |
 | `/api/v1/spk/log_aktivitas` | POST | `PELAKSANA`, `MANDOR`, `ADMIN` | Upload Activity Log |
 
