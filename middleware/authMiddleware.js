@@ -213,6 +213,109 @@ function generateToken(payload) {
 }
 
 /**
+ * Middleware: Authorize by Role (RBAC - Role-Based Access Control)
+ * 
+ * TUJUAN:
+ * - Memastikan hanya role tertentu yang bisa akses endpoint
+ * - Implementasi granular permission control
+ * - Security logging untuk audit trail
+ * 
+ * USAGE:
+ * router.post('/admin-only', 
+ *   authenticateJWT,                      // Step 1: Verify JWT token
+ *   authorizeRole(['ADMIN']),              // Step 2: Check user role
+ *   async (req, res) => { ... }
+ * );
+ * 
+ * router.post('/spk/', 
+ *   authenticateJWT, 
+ *   authorizeRole(['ASISTEN', 'ADMIN']),   // Only ASISTEN or ADMIN
+ *   handler
+ * );
+ * 
+ * ROLE HIERARCHY (MPP - Prinsip TEPAT):
+ * - ADMIN: Super user, full access
+ * - ASISTEN: Estate manager, create/update SPK
+ * - MANDOR: Field supervisor, assign tugas
+ * - PELAKSANA: Field worker, execute tugas
+ * - VIEWER: Read-only access
+ * 
+ * @param {string[]} allowedRoles - Array of allowed roles (e.g., ['ADMIN', 'ASISTEN'])
+ * @returns {Function} Express middleware function
+ */
+function authorizeRole(allowedRoles) {
+  // Validasi parameter
+  if (!Array.isArray(allowedRoles) || allowedRoles.length === 0) {
+    throw new Error('authorizeRole: allowedRoles must be a non-empty array');
+  }
+  
+  // Return middleware function
+  return (req, res, next) => {
+    // 1. Check if user is authenticated (req.user should be set by authenticateJWT)
+    if (!req.user) {
+      console.warn('⚠️  [RBAC] Authorization failed: User not authenticated');
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized',
+        message: 'Authentication required. Please login first.'
+      });
+    }
+    
+    // 2. Check if role exists in token payload
+    if (!req.user.role) {
+      console.error('❌ [RBAC] Authorization failed: Role not found in token', {
+        user_id: req.user.id_pihak,
+        endpoint: req.path,
+        method: req.method
+      });
+      
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden',
+        message: 'User role not found in token. Contact administrator.'
+      });
+    }
+    
+    // 3. Check if user's role is in the allowed list
+    const userRole = req.user.role.toUpperCase(); // Normalize to uppercase
+    const normalizedAllowedRoles = allowedRoles.map(r => r.toUpperCase());
+    
+    if (!normalizedAllowedRoles.includes(userRole)) {
+      // 4. SECURITY LOGGING: Log failed authorization attempt (audit trail)
+      console.warn('🚫 [RBAC] Access denied:', {
+        user_id: req.user.id_pihak,
+        user_name: req.user.nama_pihak || 'Unknown',
+        user_role: userRole,
+        required_roles: allowedRoles,
+        endpoint: req.path,
+        method: req.method,
+        ip: req.ip,
+        timestamp: new Date().toISOString()
+      });
+      
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden',
+        message: `Access denied. This endpoint requires one of these roles: ${allowedRoles.join(', ')}. Your role: ${userRole}`
+      });
+    }
+    
+    // 5. Authorization successful - log for audit trail (optional, can be disabled in production)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('✅ [RBAC] Access granted:', {
+        user_id: req.user.id_pihak,
+        role: userRole,
+        endpoint: req.path,
+        method: req.method
+      });
+    }
+    
+    // 6. Proceed to next middleware/handler
+    next();
+  };
+}
+
+/**
  * Helper: Decode JWT Token (tanpa verifikasi)
  * 
  * Berguna untuk debugging/testing.
@@ -229,6 +332,7 @@ function decodeToken(token) {
 module.exports = {
   authenticateJWT,
   optionalAuthenticateJWT,
+  authorizeRole,  // 🆕 NEW: RBAC middleware
   generateToken,
   decodeToken
 };

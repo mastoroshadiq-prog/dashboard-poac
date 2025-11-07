@@ -17,6 +17,9 @@ const express = require('express');
 const router = express.Router();
 const spkService = require('../services/spkService');
 
+// 🔐 RBAC Middleware (FASE 1)
+const { authenticateJWT, authorizeRole } = require('../middleware/authMiddleware');
+
 // ============================================================
 // FITUR M-4.1: MEMBUAT SPK HEADER
 // ============================================================
@@ -76,14 +79,26 @@ const spkService = require('../services/spkService');
  *     "nama_spk": "SPK Validasi Drone Blok A1",
  *     "id_asisten_pembuat": "uuid-asisten-agus"
  *   }'
+ * 
+ * 🔐 SECURITY (FASE 1 RBAC):
+ * - Authentication: JWT Required (Bearer token)
+ * - Authorization: Only ASISTEN & ADMIN can create SPK
+ * - Identity Protection: id_asisten_pembuat auto-extracted from JWT token
  */
-router.post('/', async (req, res) => {
+router.post('/', 
+  authenticateJWT,                        // 🔐 Step 1: Verify JWT token
+  authorizeRole(['ASISTEN', 'ADMIN']),   // 🔐 Step 2: Check role (ASISTEN or ADMIN only)
+  async (req, res) => {
   try {
+    // 🔐 SECURITY FIX: Get id_asisten_pembuat from JWT token (NOT from request body)
+    // Prinsip MPP - TEPAT: Jangan percaya input dari client
+    const id_asisten_pembuat = req.user.id_pihak;
+    
     // Prinsip KEAMANAN: Validasi server-side untuk semua input
     const spkData = req.body;
     
-    // 1. Validasi Required Fields
-    const requiredFields = ['nama_spk', 'id_asisten_pembuat'];
+    // 1. Validasi Required Fields (id_asisten_pembuat auto dari JWT, tidak perlu di body)
+    const requiredFields = ['nama_spk'];  // 🔐 CHANGED: id_asisten_pembuat removed (from JWT)
     const missingFields = [];
     
     requiredFields.forEach(field => {
@@ -115,14 +130,7 @@ router.post('/', async (req, res) => {
       });
     }
     
-    // 2b. Validasi id_asisten_pembuat (format UUID atau alphanumeric)
-    // Catatan: Supabase menggunakan UUID, tapi kita flexible untuk custom ID
-    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(spkData.id_asisten_pembuat)) {
-      validationErrors.push({
-        field: 'id_asisten_pembuat',
-        message: 'ID Asisten tidak valid (gunakan alphanumeric, max 50 karakter)'
-      });
-    }
+    // 2b. 🔐 REMOVED: id_asisten_pembuat validation (now from JWT token)
     
     // 2c. Validasi tanggal_target_selesai (optional, tapi kalau ada harus valid)
     if (spkData.tanggal_target_selesai) {
@@ -162,10 +170,16 @@ router.post('/', async (req, res) => {
       });
     }
     
-    // 3. Call service layer untuk insert ke database
-    const newSpk = await spkService.createSpkHeader(spkData);
+    // 3. 🔐 SECURITY: Construct SPK data with id_asisten_pembuat from JWT
+    const finalSpkData = {
+      ...spkData,
+      id_asisten_pembuat  // 🔐 Override dengan value dari JWT token (req.user.id_pihak)
+    };
     
-    // 4. Prinsip TEPAT: Response sesuai kontrak API
+    // 4. Call service layer untuk insert ke database
+    const newSpk = await spkService.createSpkHeader(finalSpkData);
+    
+    // 5. Prinsip TEPAT: Response sesuai kontrak API
     return res.status(201).json({
       success: true,
       data: newSpk,
@@ -280,8 +294,15 @@ router.post('/', async (req, res) => {
  *       }
  *     ]
  *   }'
+ * 
+ * 🔐 SECURITY (FASE 1 RBAC):
+ * - Authentication: JWT Required (Bearer token)
+ * - Authorization: Only ASISTEN, MANDOR & ADMIN can add tugas to SPK
  */
-router.post('/:id_spk/tugas', async (req, res) => {
+router.post('/:id_spk/tugas', 
+  authenticateJWT,                                    // 🔐 Step 1: Verify JWT token
+  authorizeRole(['ASISTEN', 'MANDOR', 'ADMIN']),     // 🔐 Step 2: Check role
+  async (req, res) => {
   try {
     // Prinsip KEAMANAN: Validasi server-side untuk URL parameter
     const { id_spk } = req.params;
@@ -544,7 +565,7 @@ router.get('/daftar-tugas', async (req, res) => {
 // SUB-PROSES 2: ACTUATING & REPORTING (Platform A - Flutter)
 // ============================================================
 
-const { authenticateJWT } = require('../middleware/authMiddleware');
+// 🔐 Auth middleware already imported at top of file
 
 /**
  * GET /api/v1/spk/tugas/saya
@@ -607,8 +628,15 @@ const { authenticateJWT } = require('../middleware/authMiddleware');
  * CONTOH REQUEST:
  * curl -X GET "http://localhost:3000/api/v1/spk/tugas/saya?page=1&limit=50&status=BARU" \
  *   -H "Authorization: Bearer <jwt_token>"
+ * 
+ * 🔐 SECURITY (FASE 1 RBAC):
+ * - Authentication: JWT Required (Bearer token)
+ * - Authorization: Only PELAKSANA, MANDOR & ADMIN can view tasks
  */
-router.get('/tugas/saya', authenticateJWT, async (req, res) => {
+router.get('/tugas/saya', 
+  authenticateJWT,                                    // 🔐 Step 1: Verify JWT token
+  authorizeRole(['PELAKSANA', 'MANDOR', 'ADMIN']),   // 🔐 Step 2: Check role
+  async (req, res) => {
   try {
     // Prinsip KEAMANAN: Ambil id_pelaksana dari JWT (BUKAN dari query param!)
     const id_pelaksana = req.user.id_pihak;
@@ -771,8 +799,15 @@ router.get('/tugas/saya', authenticateJWT, async (req, res) => {
  *       }
  *     ]
  *   }'
+ * 
+ * 🔐 SECURITY (FASE 1 RBAC):
+ * - Authentication: JWT Required (Bearer token)
+ * - Authorization: Only PELAKSANA, MANDOR & ADMIN can upload activity logs
  */
-router.post('/log_aktivitas', authenticateJWT, async (req, res) => {
+router.post('/log_aktivitas', 
+  authenticateJWT,                                    // 🔐 Step 1: Verify JWT token
+  authorizeRole(['PELAKSANA', 'MANDOR', 'ADMIN']),   // 🔐 Step 2: Check role
+  async (req, res) => {
   try {
     // Prinsip KEAMANAN: Ambil id_petugas (WHO) dari JWT - JANGAN PERCAYA INPUT BODY
     const id_petugas = req.user.id_pihak;
