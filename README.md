@@ -121,24 +121,36 @@ curl -X GET http://localhost:3000/api/v1/spk/tugas/saya \
   -H "Authorization: Bearer <your-jwt-token>"
 ```
 
-### **SPK Management - Platform B (WRITE/INPUT)** ✅
+### **SPK Management - Platform B (WRITE/INPUT)** 🔐 ✅
 
-| Endpoint | Method | Description | Status |
-|----------|--------|-------------|--------|
-| `/spk/` | POST | Create SPK Header | ✅ M-4.1 |
-| `/spk/:id_spk/tugas` | POST | Add Batch Tugas to SPK | ✅ M-4.2 |
-| `/spk/:id_spk` | PUT | Update SPK Header | 🔜 M-4.3 |
-| `/spk/:id_spk/tugas/:id_tugas` | PUT | Update Tugas Status | 🔜 M-4.4 |
+| Endpoint | Method | Auth | Roles | Description | Status |
+|----------|--------|------|-------|-------------|--------|
+| `/spk/` | POST | JWT | ASISTEN, ADMIN | Create SPK Header | ✅ M-4.1 🔐 |
+| `/spk/:id_spk/tugas` | POST | JWT | ASISTEN, MANDOR, ADMIN | Add Batch Tugas to SPK | ✅ M-4.2 🔐 |
+| `/spk/:id_spk` | PUT | JWT | ASISTEN, ADMIN | Update SPK Header | 🔜 M-4.3 |
+| `/spk/:id_spk/tugas/:id_tugas` | PUT | JWT | ASISTEN, MANDOR, ADMIN | Update Tugas Status | 🔜 M-4.4 |
+
+**🔐 RBAC FASE 1 (NEW!):**
+- **Authentication:** JWT Required (Bearer token in Authorization header)
+- **Authorization:** Role-based access control enforced
+- **Identity Protection:** `id_asisten_pembuat` auto-extracted from JWT token
+- **Security Logging:** Failed authorization attempts logged for audit trail
+
+**⚠️ BREAKING CHANGES (Nov 7, 2025):**
+- All Platform B endpoints now require JWT authentication
+- `id_asisten_pembuat` no longer accepted in request body (forced from JWT)
+- Unauthorized requests return 401, forbidden requests return 403
 
 ### **Platform A - Mobile Field Workers** 🔐 ✅
 
-| Endpoint | Method | Auth | Description | Status |
-|----------|--------|------|-------------|--------|
-| `/spk/tugas/saya` | GET | JWT | Get My Assigned Tasks (paginated) | ✅ NEW! |
-| `/spk/log_aktivitas` | POST | JWT | Upload 5W1H Activity Log (batch + auto-trigger) | ✅ NEW! |
+| Endpoint | Method | Auth | Roles | Description | Status |
+|----------|--------|------|-------|-------------|--------|
+| `/spk/tugas/saya` | GET | JWT | PELAKSANA, MANDOR, ADMIN | Get My Assigned Tasks (paginated) | ✅ NEW! 🔐 |
+| `/spk/log_aktivitas` | POST | JWT | PELAKSANA, MANDOR, ADMIN | Upload 5W1H Activity Log (batch + auto-trigger) | ✅ NEW! 🔐 |
 
 **Features:**
 - 🔐 **JWT Authentication** - Secure token-based auth for mobile workers
+- 🔐 **RBAC Authorization** - Role-based access control (PELAKSANA, MANDOR, ADMIN)
 - 📱 **Pagination** - Efficient data loading (default 100, max 500 items)
 - 📊 **5W1H Digital Trail** - Complete activity logging (Who, What, When, Where, Why, How)
 - 🔧 **Auto-Trigger Work Orders** - Automatic APH/SANITASI tasks on G1/G4 status
@@ -152,16 +164,29 @@ curl -X GET http://localhost:3000/api/v1/spk/tugas/saya \
 
 **Endpoint:** `POST /api/v1/spk/`
 
+🔐 **Authentication Required:** JWT Bearer Token  
+🛡️ **Authorized Roles:** `ASISTEN`, `ADMIN`
+
+**Request Headers:**
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: application/json
+```
+
 **Request Body:**
 ```json
 {
   "nama_spk": "SPK Validasi Drone Blok A1",
-  "id_asisten_pembuat": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10",
   "tanggal_mulai": "2024-01-15",
   "tanggal_selesai": "2024-01-20",
   "keterangan": "Validasi drone untuk blok A1-A5"
 }
 ```
+
+⚠️ **BREAKING CHANGE (Nov 7, 2025):**  
+- `id_asisten_pembuat` is now **AUTO-EXTRACTED from JWT token** (`req.user.id_pihak`)
+- Do NOT include `id_asisten_pembuat` in request body (will be ignored)
+- This prevents identity spoofing attacks
 
 **Response:**
 ```json
@@ -171,6 +196,7 @@ curl -X GET http://localhost:3000/api/v1/spk/tugas/saya \
   "data": {
     "id_spk": "uuid-generated",
     "nama_spk": "SPK Validasi Drone Blok A1",
+    "id_asisten_pembuat": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10",
     "status_spk": "BARU",
     "created_at": "2024-01-15T10:00:00Z",
     ...
@@ -179,9 +205,11 @@ curl -X GET http://localhost:3000/api/v1/spk/tugas/saya \
 ```
 
 **Validation:**
+- ✅ JWT authentication (`401` if missing/invalid token)
+- ✅ Role authorization (`403` if not ASISTEN/ADMIN)
 - ✅ Server-side FK validation (`id_asisten_pembuat` → `master_pihak`)
 - ✅ Date format validation (YYYY-MM-DD)
-- ✅ Required fields check
+- ✅ Required fields check (`nama_spk` only)
 - ✅ Auto-generate UUID for `id_spk`
 - ✅ Default status: `BARU`
 
@@ -201,6 +229,15 @@ node test-spk-create.js
 ### **M-4.2: Add Batch Tugas to SPK**
 
 **Endpoint:** `POST /api/v1/spk/:id_spk/tugas`
+
+🔐 **Authentication Required:** JWT Bearer Token  
+🛡️ **Authorized Roles:** `ASISTEN`, `MANDOR`, `ADMIN`
+
+**Request Headers:**
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: application/json
+```
 
 **Request Body:**
 ```json
@@ -251,6 +288,8 @@ node test-spk-create.js
 ```
 
 **Validation:**
+- ✅ JWT authentication (`401` if missing/invalid token)
+- ✅ Role authorization (`403` if not ASISTEN/MANDOR/ADMIN)
 - ✅ SPK existence check (`id_spk` → `spk_header`)
 - ✅ Pelaksana FK validation (`id_pelaksana` → `master_pihak`)
 - ✅ Tipe tugas enum validation (`VALIDASI_DRONE`, `APH`, `PANEN`, `LAINNYA`)
@@ -423,7 +462,54 @@ node test-full-auto.js
 
 ---
 
-## 🗄️ Database Schema
+## � Security & RBAC
+
+### **Authentication**
+- **JWT Bearer Token** required for all Platform A and Platform B endpoints
+- Token expires in **7 days** (configurable via `JWT_EXPIRES_IN`)
+- Secret stored in environment variable `JWT_SECRET`
+
+### **Role-Based Access Control (RBAC)**
+
+**Role Hierarchy:**
+```
+ADMIN         → Full access to all endpoints
+  ↓
+ASISTEN       → Create/update SPK, assign tasks (Estate Manager)
+  ↓
+MANDOR        → Assign tasks to subordinates, upload logs (Field Supervisor)
+  ↓
+PELAKSANA     → Execute tasks, upload own logs (Field Worker)
+  ↓
+VIEWER        → Read-only access (future implementation)
+```
+
+**Permission Matrix:**
+
+| Endpoint | Method | Allowed Roles | Description |
+|----------|--------|---------------|-------------|
+| `/api/v1/spk/` | POST | `ASISTEN`, `ADMIN` | Create SPK Header |
+| `/api/v1/spk/:id/tugas` | POST | `ASISTEN`, `MANDOR`, `ADMIN` | Add Tasks to SPK |
+| `/api/v1/spk/tugas/saya` | GET | `PELAKSANA`, `MANDOR`, `ADMIN` | Get My Tasks |
+| `/api/v1/spk/log_aktivitas` | POST | `PELAKSANA`, `MANDOR`, `ADMIN` | Upload Activity Log |
+
+**Security Features:**
+- ✅ **Identity Protection:** `id_asisten_pembuat` auto-extracted from JWT (prevents spoofing)
+- ✅ **Authorization Enforcement:** Role checked on every request via `authorizeRole()` middleware
+- ✅ **Audit Trail:** Failed authorization attempts logged with user details, endpoint, IP, timestamp
+- ✅ **Case-Insensitive Roles:** Normalized to uppercase for consistency
+- ✅ **Error Responses:** `401 Unauthorized` (no/invalid token), `403 Forbidden` (wrong role)
+
+**Implementation Files:**
+- `middleware/authMiddleware.js` - JWT authentication + RBAC authorization
+- `routes/spkRoutes.js` - Protected endpoints with role checks
+- `test-rbac-fase1.js` - Comprehensive RBAC test suite (7 scenarios)
+
+📄 **RBAC Analysis:** `docs/ANALISIS_RBAC.md`
+
+---
+
+## �🗄️ Database Schema
 
 ### **Core Tables:**
 
@@ -485,20 +571,82 @@ kebun_n_pokok
 
 ## 🧪 Testing
 
+### **RBAC Manual Testing (PowerShell)**
+
+```powershell
+# 1. Generate tokens for different roles
+node generate-token-only.js
+# Select role when prompted: ADMIN, ASISTEN, MANDOR, PELAKSANA, VIEWER
+
+# 2. Test 401 Unauthorized (no token)
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/" -Method POST `
+  -ContentType "application/json" `
+  -Body '{"nama_spk":"Test SPK"}'
+# Expected: 401 "Access denied. No token provided"
+
+# 3. Test 403 Forbidden (wrong role)
+$pelaksanaToken = "eyJhbG..." # PELAKSANA token
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/" -Method POST `
+  -Headers @{Authorization="Bearer $pelaksanaToken"} `
+  -ContentType "application/json" `
+  -Body '{"nama_spk":"Test SPK"}'
+# Expected: 403 "Access denied. Requires role: ASISTEN, ADMIN"
+
+# 4. Test 200/201 Success (correct role)
+$asistenToken = "eyJhbG..." # ASISTEN token
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/" -Method POST `
+  -Headers @{Authorization="Bearer $asistenToken"} `
+  -ContentType "application/json" `
+  -Body '{"nama_spk":"Test SPK Valid"}'
+# Expected: 201 "SPK berhasil dibuat"
+
+# 5. Test identity protection (id_asisten_pembuat auto from JWT)
+# Note: id_asisten_pembuat in request body will be IGNORED
+$bodyWithId = @{
+  nama_spk = "Test SPK"
+  id_asisten_pembuat = "00000000-0000-0000-0000-000000000000" # Wrong ID
+} | ConvertTo-Json
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/" -Method POST `
+  -Headers @{Authorization="Bearer $asistenToken"} `
+  -ContentType "application/json" `
+  -Body $bodyWithId
+# Expected: 201 with id_asisten_pembuat = token's id_pihak (NOT from body)
+```
+
+**Test Scenarios Coverage:**
+- ✅ Test 1: No token → `401 Unauthorized`
+- ✅ Test 2: Invalid token → `401 Unauthorized`  
+- ✅ Test 3: Wrong role → `403 Forbidden`
+- ✅ Test 4: Correct role → `200/201 Success`
+- ✅ Test 5: Identity spoofing → Prevented (JWT override)
+- ✅ Test 6: Multi-role endpoint → All allowed roles succeed
+- ✅ Test 7: Admin bypass → ADMIN can access all endpoints
+
+📄 **Full Test Suite:** `test-rbac-fase1.js` (automated tests)
+
+---
+
 ### **Manual Testing (PowerShell)**
 
 ```bash
 # Test Dashboard KPI
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" -Method GET
 
-# Test Create SPK (Platform B)
-.\test-post-spk.ps1
+# Test Create SPK (Platform B) - REQUIRES JWT NOW
+$token = "eyJhbG..." # ASISTEN or ADMIN token
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/" -Method POST `
+  -Headers @{Authorization="Bearer $token"} `
+  -ContentType "application/json" `
+  -Body '{"nama_spk":"Test SPK"}'
 
-# Test Add Tugas (Platform B)
-.\test-add-tugas-api.ps1
+# Test Add Tugas (Platform B) - REQUIRES JWT NOW
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/{id_spk}/tugas" -Method POST `
+  -Headers @{Authorization="Bearer $token"} `
+  -ContentType "application/json" `
+  -Body '{"tugas":[...]}'
 
 # Test Platform A - Get Tasks
-node generate-token-only.js  # Copy token
+node generate-token-only.js  # Copy PELAKSANA/MANDOR/ADMIN token
 $token = "eyJhbG..."
 Invoke-RestMethod -Uri "http://localhost:3000/api/v1/spk/tugas/saya" `
   -Headers @{Authorization="Bearer $token"}
