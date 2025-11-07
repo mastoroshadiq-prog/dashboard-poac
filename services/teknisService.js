@@ -46,17 +46,35 @@ async function calculateMatriksKebingungan() {
   try {
     console.log('🔍 [DEBUG] Calculating Matriks Kebingungan (Confusion Matrix)...');
     
-    // Query log_aktivitas_5w1h dengan JOIN ke spk_tugas untuk mendapatkan tipe_tugas
-    // hasil_json contains: { status_drone: "Kuning/Merah/Hijau", status_aktual: "G0/G1/G2/G3/G4" }
-    const { data, error } = await supabase
+    // FIXED: Query without JOIN to avoid Supabase relationship cache issues
+    // Step 1: Get all logs
+    const { data: logs, error: logsError } = await supabase
       .from('log_aktivitas_5w1h')
-      .select(`
-        id_log, 
-        hasil_json,
-        spk_tugas!inner(tipe_tugas)
-      `);
+      .select('id_log, hasil_json, id_tugas');
     
-    if (error) throw error;
+    if (logsError) throw logsError;
+    
+    // Step 2: Get all spk_tugas
+    const tugasIds = [...new Set(logs.map(log => log.id_tugas))];
+    const { data: tugasList, error: tugasError } = await supabase
+      .from('spk_tugas')
+      .select('id_tugas, tipe_tugas')
+      .in('id_tugas', tugasIds);
+    
+    if (tugasError) throw tugasError;
+    
+    // Step 3: Create map for quick lookup
+    const tugasMap = {};
+    tugasList.forEach(tugas => {
+      tugasMap[tugas.id_tugas] = tugas;
+    });
+    
+    // Step 4: Combine data
+    const data = logs.map(log => ({
+      id_log: log.id_log,
+      hasil_json: log.hasil_json,
+      spk_tugas: tugasMap[log.id_tugas] || null
+    }));
     
     console.log(`📊 Total Logs: ${data?.length || 0}`);
     
@@ -198,16 +216,35 @@ async function calculateDistribusiNdre() {
   try {
     console.log('🔍 [DEBUG] Calculating Distribusi NDRE (Health Status Distribution)...');
     
-    // Query log_aktivitas_5w1h dengan JOIN ke spk_tugas
-    const { data, error } = await supabase
+    // FIXED: Query without JOIN to avoid Supabase relationship cache issues
+    // Step 1: Get all logs
+    const { data: logs, error: logsError } = await supabase
       .from('log_aktivitas_5w1h')
-      .select(`
-        id_log, 
-        hasil_json,
-        spk_tugas!inner(tipe_tugas)
-      `);
+      .select('id_log, hasil_json, id_tugas');
     
-    if (error) throw error;
+    if (logsError) throw logsError;
+    
+    // Step 2: Get all spk_tugas
+    const tugasIds = [...new Set(logs.map(log => log.id_tugas))];
+    const { data: tugasList, error: tugasError } = await supabase
+      .from('spk_tugas')
+      .select('id_tugas, tipe_tugas')
+      .in('id_tugas', tugasIds);
+    
+    if (tugasError) throw tugasError;
+    
+    // Step 3: Create map for quick lookup
+    const tugasMap = {};
+    tugasList.forEach(tugas => {
+      tugasMap[tugas.id_tugas] = tugas;
+    });
+    
+    // Step 4: Combine data
+    const data = logs.map(log => ({
+      id_log: log.id_log,
+      hasil_json: log.hasil_json,
+      spk_tugas: tugasMap[log.id_tugas] || null
+    }));
     
     console.log(`📊 Total Logs: ${data?.length || 0}`);
     
