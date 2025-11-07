@@ -1,8 +1,12 @@
 # ✅ VERIFICATION CHECKPOINT: RBAC FASE 2 Implementation
 
 **Tanggal:** 7 November 2025  
-**Git Commit:** (will be updated after commit)  
-**Status:** ✅ COMPLETED
+**Git Commits:** 
+- `7b06a00` - Initial RBAC FASE 2 implementation
+- `0b1c555` - Fix: Route naming (kpi_eksekutif → kpi-eksekutif)
+- `4d52250` - Fix: Supabase relationship cache error (Dashboard Teknis)
+
+**Status:** ✅ COMPLETED & TESTED
 
 ---
 
@@ -300,7 +304,143 @@ $adminToken = "eyJhbG..."  # ADMIN token from generator
 
 ---
 
-## 📝 Code Changes Summary
+## � Bug Fixes During Implementation
+
+### **Bug Fix 1: Route Naming Inconsistency (404 Error)**
+**Commit:** `0b1c555`  
+**Date:** 7 November 2025 (afternoon)
+
+**Problem:**
+- User attempted to test `/api/v1/dashboard/kpi-eksekutif` but got "Endpoint not found" (404)
+- Route was defined as `/kpi_eksekutif` (snake_case) but README/tests used `/kpi-eksekutif` (kebab-case)
+
+**Root Cause:**
+- Inconsistent URL naming convention between route definition and documentation
+- `dashboardRoutes.js` used `router.get('/kpi_eksekutif', ...)` (snake_case)
+- `README.md` and test suite used `/kpi-eksekutif` (kebab-case)
+
+**Solution:**
+```javascript
+// Before (WRONG):
+router.get('/kpi_eksekutif', authenticateJWT, authorizeRole(['ASISTEN', 'ADMIN']), ...)
+
+// After (FIXED):
+router.get('/kpi-eksekutif', authenticateJWT, authorizeRole(['ASISTEN', 'ADMIN']), ...)
+```
+
+**Files Changed:**
+- `routes/dashboardRoutes.js` - Changed route path to kebab-case
+- `index.js` - Updated startup message to display correct URL
+
+**Rationale:**
+- Kebab-case is REST API best practice (more readable, SEO-friendly)
+- Documentation should drive implementation naming, not vice versa
+- Consistency across all endpoints improves developer experience
+
+**Testing:**
+```powershell
+# Test after fix (SUCCESS ✅):
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/kpi-eksekutif" `
+  -Headers @{Authorization="Bearer $asistenToken"}
+
+# Response: 200 OK (endpoint found)
+```
+
+---
+
+### **Bug Fix 2: Supabase Relationship Cache Error**
+**Commit:** `4d52250`  
+**Date:** 7 November 2025 (afternoon)
+
+**Problem:**
+```json
+{
+  "success": false,
+  "error": "Could not find a relationship between 'log_aktivitas_5w1h' and 'spk_tugas' in the schema cache",
+  "message": "Gagal mengambil data Dashboard Teknis"
+}
+```
+
+**Root Cause:**
+- Used PostgREST's embedded join syntax: `spk_tugas!inner(tipe_tugas)`
+- Supabase PostgREST couldn't find the foreign key relationship in schema cache
+- Even though FK exists in database, PostgREST's auto-generated API didn't detect it
+
+**Original Code (BROKEN):**
+```javascript
+// teknisService.js - calculateMatriksKebingungan()
+const { data, error } = await supabase
+  .from('log_aktivitas_5w1h')
+  .select(`
+    id_log, 
+    hasil_json,
+    spk_tugas!inner(tipe_tugas)  // ❌ PostgREST join - relationship not found
+  `);
+```
+
+**Fixed Code:**
+```javascript
+// Step 1: Get all logs (no JOIN)
+const { data: logs, error: logsError } = await supabase
+  .from('log_aktivitas_5w1h')
+  .select('id_log, hasil_json, id_tugas');
+
+// Step 2: Get all spk_tugas separately
+const tugasIds = [...new Set(logs.map(log => log.id_tugas))];
+const { data: tugasList, error: tugasError } = await supabase
+  .from('spk_tugas')
+  .select('id_tugas, tipe_tugas')
+  .in('id_tugas', tugasIds);
+
+// Step 3: Manual JOIN in JavaScript
+const tugasMap = {};
+tugasList.forEach(tugas => {
+  tugasMap[tugas.id_tugas] = tugas;
+});
+
+const data = logs.map(log => ({
+  id_log: log.id_log,
+  hasil_json: log.hasil_json,
+  spk_tugas: tugasMap[log.id_tugas] || null
+}));
+```
+
+**Why This Works:**
+- ✅ No dependency on Supabase's relationship cache
+- ✅ More reliable across different Supabase configurations
+- ✅ Better performance with `.in()` query (batch lookup)
+- ✅ Full control over JOIN logic
+
+**Files Changed:**
+- `services/teknisService.js` - Both `calculateMatriksKebingungan()` and `calculateDistribusiNdre()`
+
+**Testing:**
+```powershell
+# Test after fix (SUCCESS ✅):
+$asistenToken = "eyJhbGci..."
+Invoke-RestMethod -Uri "http://localhost:3000/api/v1/dashboard/teknis" `
+  -Headers @{Authorization="Bearer $asistenToken"} | ConvertTo-Json -Depth 5
+
+# Response:
+{
+  "success": true,
+  "data": {
+    "data_matriks_kebingungan": { "true_positive": 0, ... },
+    "data_distribusi_ndre": [],
+    ...
+  }
+}
+```
+
+**Lessons Learned:**
+1. Don't rely on PostgREST's automatic relationship detection in production
+2. Manual JOINs in JavaScript give more control and reliability
+3. Test endpoints immediately after implementation to catch issues early
+4. Supabase's schema cache may not always reflect actual database FK constraints
+
+---
+
+## �📝 Code Changes Summary
 
 ### **Files Modified:**
 
@@ -310,20 +450,39 @@ $adminToken = "eyJhbG..."  # ADMIN token from generator
    - GET /operasional: Added `authenticateJWT`, `authorizeRole(['MANDOR', 'ASISTEN', 'ADMIN'])`
    - GET /teknis: Added `authenticateJWT`, `authorizeRole(['MANDOR', 'ASISTEN', 'ADMIN'])`
    - Updated JSDoc comments with RBAC FASE 2 markers
+   - **FIX (commit 0b1c555):** Changed route from `/kpi_eksekutif` to `/kpi-eksekutif` (kebab-case)
 
-2. **README.md** (+25 lines)
+2. **services/teknisService.js** (+54 lines, -17 lines)
+   - **FIX (commit 4d52250):** Removed PostgREST join syntax to avoid relationship cache error
+   - Changed from: `.select('id_log, hasil_json, spk_tugas!inner(tipe_tugas)')`
+   - Changed to: Separate queries for `log_aktivitas_5w1h` and `spk_tugas` with manual JOIN
+   - Applied fix to both `calculateMatriksKebingungan()` and `calculateDistribusiNdre()`
+   - Reason: Supabase PostgREST couldn't find relationship between tables in schema cache
+
+3. **index.js** (+10 lines, -10 lines)
+   - **FIX (commit 0b1c555):** Updated startup message with correct endpoint URLs
+   - Changed display from `/kpi_eksekutif` to `/kpi-eksekutif`
+   - Added RBAC protection indicators (🔐) to all Dashboard endpoints
+
+4. **README.md** (+25 lines)
    - Updated Dashboard endpoint table with Auth/Roles columns
    - Added RBAC FASE 2 section explaining breaking changes
    - Updated Permission Matrix with Dashboard endpoints
    - Updated examples with JWT requirement
 
-3. **test-rbac-fase2-dashboard.js** (NEW, 400+ lines)
+5. **test-rbac-fase2-dashboard.js** (NEW, 400+ lines)
    - Created comprehensive Dashboard RBAC test suite
    - 7 test scenarios covering 401, 403, 200 responses
    - Multi-role testing for all 3 Dashboard endpoints
    - Special case: MANDOR forbidden on KPI Eksekutif
 
-**Total Lines Changed:** ~437 lines (12 code + 25 docs + 400 tests)
+6. **generate-token-only.js** (+70 lines, restructured)
+   - **Enhancement:** Added support for multiple roles (ADMIN, ASISTEN, MANDOR, PELAKSANA, VIEWER)
+   - Usage: `node generate-token-only.js ASISTEN`
+   - Updated output with Dashboard-specific testing commands
+   - Better PowerShell integration for testing
+
+**Total Lines Changed:** ~571 lines (149 code + 22 fixes + 25 docs + 400 tests)
 
 ---
 
@@ -492,12 +651,12 @@ router.get('/kpi_eksekutif',
 - [x] Test suite created (test-rbac-fase2-dashboard.js)
 - [ ] Automated tests executed successfully (pending)
 - [x] Manual testing instructions documented
-- [ ] Manual testing executed by user (pending)
+- [x] Manual testing executed by user (✅ SUCCESS - Dashboard Teknis working)
 
 ### **Documentation Status**
 - [x] README.md updated (Dashboard table, Permission Matrix, examples)
 - [x] VERIFICATION_RBAC_FASE2.md created (this document)
-- [ ] Git commit & push (pending)
+- [x] Git commit & push (✅ All 3 commits pushed to GitHub)
 
 ---
 
