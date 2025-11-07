@@ -59,7 +59,7 @@ const { authenticateJWT, authorizeRole } = require('../middleware/authMiddleware
  * GET /api/v1/dashboard/kpi_eksekutif?estate=EST001
  * Authorization: Bearer <jwt-token>
  */
-router.get('/kpi_eksekutif', 
+router.get('/kpi-eksekutif', 
   authenticateJWT, 
   authorizeRole(['ASISTEN', 'ADMIN']), 
   async (req, res) => {
