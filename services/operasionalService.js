@@ -590,6 +590,231 @@ async function getBlockersByCategory(category) {
 }
 
 /**
+ * 📊 PANEN METRICS - NEW SCHEMA (ops_*)
+ * 
+ * Requirements: Tahap 6 SPK Workflow Model
+ * Fetch execution data from ops_eksekusi_tindakan (NEW schema)
+ * 
+ * WORKFLOW: SOP → Jadwal → SPK → Eksekusi
+ * 
+ * SCHEMA: ops_eksekusi_tindakan
+ * - id_spk (FK to ops_spk_tindakan)
+ * - hasil = "X ton TBS, reject Y ton (Z%)"
+ * - tanggal_eksekusi
+ * - petugas
+ * - catatan
+ * 
+ * @returns {Object} Panen metrics with summary and breakdown
+ */
+async function getPanenMetrics() {
+  try {
+    console.log('🔍 [PANEN] Calculating Panen Metrics (NEW Schema)...');
+    
+    // Query all PANEN executions with full workflow JOIN
+    const { data, error } = await supabase
+      .from('ops_eksekusi_tindakan')
+      .select(`
+        id_eksekusi_tindakan,
+        tanggal_eksekusi,
+        hasil,
+        petugas,
+        catatan,
+        ops_spk_tindakan!inner (
+          id_spk,
+          nomor_spk,
+          lokasi,
+          mandor,
+          status,
+          tanggal_mulai,
+          tanggal_selesai
+        ),
+        ops_jadwal_tindakan!inner (
+          ops_sub_tindakan!inner (
+            nama_sub,
+            ops_fase_besar!inner (
+              nama_fase
+            )
+          )
+        )
+      `)
+      .not('id_spk', 'is', null);  // Only executions linked to SPK
+    
+    if (error) throw error;
+    
+    console.log(`📊 Total Panen Executions: ${data?.length || 0}`);
+    
+    if (!data || data.length === 0) {
+      return {
+        summary: {
+          total_ton_tbs: 0,
+          avg_reject_persen: 0,
+          total_spk: 0,
+          total_executions: 0
+        },
+        by_spk: [],
+        weekly_breakdown: []
+      };
+    }
+    
+    // Parse hasil field: "X ton TBS, reject Y ton (Z%)"
+    const parseHasil = (hasil) => {
+      if (!hasil) return { ton_tbs: 0, reject_ton: 0, reject_persen: 0 };
+      
+      try {
+        // Extract: "102.5 ton TBS, reject 2.1 ton (2.0%)"
+        const tonMatch = hasil.match(/([\d.]+)\s*ton\s*TBS/i);
+        const rejectTonMatch = hasil.match(/reject\s*([\d.]+)\s*ton/i);
+        const rejectPersenMatch = hasil.match(/\(([\d.]+)%\)/);
+        
+        return {
+          ton_tbs: tonMatch ? parseFloat(tonMatch[1]) : 0,
+          reject_ton: rejectTonMatch ? parseFloat(rejectTonMatch[1]) : 0,
+          reject_persen: rejectPersenMatch ? parseFloat(rejectPersenMatch[1]) : 0
+        };
+      } catch (err) {
+        console.error('⚠️  Error parsing hasil:', hasil, err);
+        return { ton_tbs: 0, reject_ton: 0, reject_persen: 0 };
+      }
+    };
+    
+    // Process all executions
+    const executionsParsed = data.map(exec => {
+      const parsed = parseHasil(exec.hasil);
+      
+      return {
+        id_eksekusi: exec.id_eksekusi_tindakan,
+        tanggal: exec.tanggal_eksekusi,
+        ton_tbs: parsed.ton_tbs,
+        reject_ton: parsed.reject_ton,
+        reject_persen: parsed.reject_persen,
+        petugas: exec.petugas,
+        catatan: exec.catatan,
+        spk: {
+          id_spk: exec.ops_spk_tindakan.id_spk,
+          nomor_spk: exec.ops_spk_tindakan.nomor_spk,
+          lokasi: exec.ops_spk_tindakan.lokasi,
+          mandor: exec.ops_spk_tindakan.mandor,
+          status: exec.ops_spk_tindakan.status,
+          tanggal_mulai: exec.ops_spk_tindakan.tanggal_mulai,
+          tanggal_selesai: exec.ops_spk_tindakan.tanggal_selesai
+        }
+      };
+    });
+    
+    // Calculate summary
+    const totalTonTbs = executionsParsed.reduce((sum, e) => sum + e.ton_tbs, 0);
+    const totalRejectPersen = executionsParsed.reduce((sum, e) => sum + e.reject_persen, 0);
+    const avgRejectPersen = executionsParsed.length > 0 
+      ? totalRejectPersen / executionsParsed.length 
+      : 0;
+    
+    const uniqueSpks = [...new Set(executionsParsed.map(e => e.spk.id_spk))];
+    
+    const summary = {
+      total_ton_tbs: parseFloat(totalTonTbs.toFixed(1)),
+      avg_reject_persen: parseFloat(avgRejectPersen.toFixed(2)),
+      total_spk: uniqueSpks.length,
+      total_executions: executionsParsed.length
+    };
+    
+    // Group by SPK
+    const spkMap = {};
+    
+    executionsParsed.forEach(exec => {
+      const spkId = exec.spk.id_spk;
+      
+      if (!spkMap[spkId]) {
+        spkMap[spkId] = {
+          nomor_spk: exec.spk.nomor_spk,
+          lokasi: exec.spk.lokasi,
+          mandor: exec.spk.mandor,
+          status: exec.spk.status,
+          tanggal_mulai: exec.spk.tanggal_mulai,
+          tanggal_selesai: exec.spk.tanggal_selesai,
+          total_ton: 0,
+          avg_reject: 0,
+          execution_count: 0,
+          executions: []
+        };
+      }
+      
+      spkMap[spkId].total_ton += exec.ton_tbs;
+      spkMap[spkId].avg_reject += exec.reject_persen;
+      spkMap[spkId].execution_count += 1;
+      spkMap[spkId].executions.push({
+        tanggal: exec.tanggal,
+        ton_tbs: exec.ton_tbs,
+        reject_persen: exec.reject_persen,
+        petugas: exec.petugas
+      });
+    });
+    
+    // Convert to array and calculate averages
+    const bySpk = Object.values(spkMap).map(spk => ({
+      nomor_spk: spk.nomor_spk,
+      lokasi: spk.lokasi,
+      mandor: spk.mandor,
+      status: spk.status,
+      periode: `${spk.tanggal_mulai} s/d ${spk.tanggal_selesai}`,
+      total_ton: parseFloat(spk.total_ton.toFixed(1)),
+      avg_reject: parseFloat((spk.avg_reject / spk.execution_count).toFixed(2)),
+      execution_count: spk.execution_count,
+      executions: spk.executions
+    }));
+    
+    // Sort by tanggal_mulai
+    bySpk.sort((a, b) => new Date(a.periode.split(' s/d ')[0]) - new Date(b.periode.split(' s/d ')[0]));
+    
+    // Weekly breakdown (group by week)
+    const weeklyMap = {};
+    
+    executionsParsed.forEach(exec => {
+      const date = new Date(exec.tanggal);
+      const weekStart = new Date(date);
+      weekStart.setDate(date.getDate() - date.getDay());  // Start of week (Sunday)
+      const weekKey = weekStart.toISOString().split('T')[0];
+      
+      if (!weeklyMap[weekKey]) {
+        weeklyMap[weekKey] = {
+          week_start: weekKey,
+          total_ton: 0,
+          avg_reject: 0,
+          execution_count: 0
+        };
+      }
+      
+      weeklyMap[weekKey].total_ton += exec.ton_tbs;
+      weeklyMap[weekKey].avg_reject += exec.reject_persen;
+      weeklyMap[weekKey].execution_count += 1;
+    });
+    
+    const weeklyBreakdown = Object.values(weeklyMap).map(week => ({
+      week_start: week.week_start,
+      total_ton: parseFloat(week.total_ton.toFixed(1)),
+      avg_reject: parseFloat((week.avg_reject / week.execution_count).toFixed(2)),
+      execution_count: week.execution_count
+    }));
+    
+    // Sort by week
+    weeklyBreakdown.sort((a, b) => new Date(a.week_start) - new Date(b.week_start));
+    
+    console.log('✅ Panen Metrics Summary:', summary);
+    console.log(`   By SPK: ${bySpk.length} documents`);
+    console.log(`   Weekly: ${weeklyBreakdown.length} weeks`);
+    
+    return {
+      summary,
+      by_spk: bySpk,
+      weekly_breakdown: weeklyBreakdown
+    };
+    
+  } catch (err) {
+    console.error('❌ Error calculating Panen Metrics:', err.message);
+    throw err;
+  }
+}
+
+/**
  * MAIN SERVICE FUNCTION: Get Dashboard Operasional
  * 
  * Menggabungkan semua data operasional dalam satu response
@@ -600,6 +825,7 @@ async function getBlockersByCategory(category) {
  * - risk_level_{validasi, aph, sanitasi}
  * - blockers_{validasi, aph, sanitasi}
  * - pelaksana_assigned_{validasi, aph, sanitasi}
+ * - kpi_hasil_panen (NEW: Tahap 6 model)
  * 
  * @param {Object} filters - Optional filters (divisi, tanggal, dll)
  * @returns {Object} Dashboard operasional data
@@ -619,7 +845,8 @@ async function getDashboardOperasional(filters = {}) {
       sanitasiTasks,
       validasiBlockersDb,  // ✨ NEW: Fetch database blockers
       aphBlockersDb,
-      sanitasiBlockersDb
+      sanitasiBlockersDb,
+      panenMetrics        // 🆕 NEW: Panen KPI (Tahap 6)
     ] = await Promise.all([
       calculateDataCorong(),
       calculatePapanPeringkat(),
@@ -630,7 +857,8 @@ async function getDashboardOperasional(filters = {}) {
       getTasksByCategory('SANITASI'),       // ✨ NEW
       getBlockersByCategory('VALIDASI'),    // ✨ NEW
       getBlockersByCategory('APH'),         // ✨ NEW
-      getBlockersByCategory('SANITASI')     // ✨ NEW
+      getBlockersByCategory('SANITASI'),    // ✨ NEW
+      getPanenMetrics()                     // 🆕 NEW
     ]);
     
     // Calculate risk levels (synchronous - based on data we already have)
@@ -725,6 +953,10 @@ async function getDashboardOperasional(filters = {}) {
         sanitasi_blockers_detail: sanitasiBlockersDb
       },
       data_papan_peringkat: dataPapanPeringkat,
+      
+      // 🆕 NEW KPI: Hasil Panen (Tahap 6 Model)
+      kpi_hasil_panen: panenMetrics,
+      
       // Metadata untuk debugging (5W1H - When)
       generated_at: new Date().toISOString(),
       filters: filters
@@ -748,5 +980,7 @@ module.exports = {
   calculateResourceAllocation,
   // Export drill-down functions (NEW)
   getTasksByCategory,
-  getBlockersByCategory
+  getBlockersByCategory,
+  // Export PANEN metrics (NEW - Tahap 6)
+  getPanenMetrics
 };

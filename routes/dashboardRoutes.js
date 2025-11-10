@@ -363,4 +363,101 @@ router.get('/teknis',
   }
 });
 
+/**
+ * GET /api/v1/dashboard/panen
+ * 
+ * 🆕 PHASE 1: PANEN Tracking (Tahap 6 Model - NEW Schema)
+ * 🔐 RBAC FASE 2: Requires JWT + Role Authorization
+ * ALLOWED ROLES: MANDOR, ASISTEN, ADMIN
+ * 
+ * TUJUAN: KPI Hasil Panen - Dashboard Operasional Enhancement
+ * 
+ * QUERY PARAMETERS (Optional):
+ * - date_from: Start date for filtering (ISO 8601)
+ * - date_to: End date for filtering (ISO 8601)
+ * 
+ * RESPONSE STRUCTURE:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "summary": {
+ *       "total_ton_tbs": 895.3,
+ *       "avg_reject_persen": 2.16,
+ *       "total_spk": 4,
+ *       "total_executions": 8
+ *     },
+ *     "by_spk": [
+ *       {
+ *         "nomor_spk": "SPK/PANEN/2025/001",
+ *         "lokasi": "Blok A1-A10 (Afdeling 1)",
+ *         "mandor": "Mandor Panen - Joko Susilo",
+ *         "status": "SELESAI",
+ *         "periode": "2025-10-14 s/d 2025-10-18",
+ *         "total_ton": 200.8,
+ *         "avg_reject": 1.95,
+ *         "execution_count": 2,
+ *         "executions": [...]
+ *       }
+ *     ],
+ *     "weekly_breakdown": [...]
+ *   },
+ *   "message": "Data KPI Hasil Panen berhasil diambil"
+ * }
+ * 
+ * CONTOH REQUEST:
+ * GET /api/v1/dashboard/panen
+ * Authorization: Bearer <jwt-token>
+ */
+router.get('/panen', 
+  authenticateJWT, 
+  authorizeRole(['MANDOR', 'ASISTEN', 'ADMIN']), 
+  async (req, res) => {
+  try {
+    const filters = {};
+    
+    // Optional filter: date range
+    if (req.query.date_from) {
+      const dateFrom = new Date(req.query.date_from);
+      if (isNaN(dateFrom.getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid date_from parameter',
+          message: 'Parameter date_from harus format ISO 8601 (YYYY-MM-DD)'
+        });
+      }
+      filters.date_from = dateFrom.toISOString();
+    }
+    
+    if (req.query.date_to) {
+      const dateTo = new Date(req.query.date_to);
+      if (isNaN(dateTo.getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid date_to parameter',
+          message: 'Parameter date_to harus format ISO 8601 (YYYY-MM-DD)'
+        });
+      }
+      filters.date_to = dateTo.toISOString();
+    }
+    
+    // Call service layer (NEW schema only)
+    const data = await operasionalService.getPanenMetrics(filters);
+    
+    return res.status(200).json({
+      success: true,
+      data: data,
+      message: 'Data KPI Hasil Panen berhasil diambil'
+    });
+    
+  } catch (error) {
+    console.error('❌ [API Error] GET /api/v1/dashboard/panen:', error.message);
+    
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Gagal mengambil data KPI Hasil Panen'
+    });
+  }
+});
+
 module.exports = router;

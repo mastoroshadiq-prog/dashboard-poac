@@ -1,0 +1,97 @@
+-- 1. Mengaktifkan ekstensi UUID (jika belum)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+---
+
+-- 2. Membuat tabel 'ops_fase_besar' (Tanpa dependensi)
+CREATE TABLE public.ops_fase_besar (
+    id_fase_besar uuid DEFAULT uuid_generate_v4() NOT NULL,
+    nama_fase varchar(100) NOT NULL,
+    umur_mulai int NULL,
+    umur_selesai int NULL,
+    deskripsi varchar(255) NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_fase_besar PRIMARY KEY (id_fase_besar)
+);
+
+---
+
+-- 3. Membuat tabel 'ops_sub_tindakan' (Tergantung pada 'ops_fase_besar')
+CREATE TABLE public.ops_sub_tindakan (
+    id_sub_tindakan uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_fase_besar uuid NULL,
+    nama_sub varchar(100) NOT NULL,
+    deskripsi varchar(255) NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_sub_tindakan PRIMARY KEY (id_sub_tindakan),
+    CONSTRAINT fk_sub_tindakan_fase
+        FOREIGN KEY(id_fase_besar)
+        REFERENCES public.ops_fase_besar(id_fase_besar)
+        ON DELETE SET NULL
+);
+
+---
+
+-- 4. Membuat tabel 'ops_jadwal_tindakan' (Tergantung pada 'ops_sub_tindakan')
+CREATE TABLE public.ops_jadwal_tindakan (
+    id_jadwal_tindakan uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_tanaman uuid NULL, -- Tipe diubah ke UUID, diasumsikan merujuk ke tabel lain
+    id_sub_tindakan uuid NULL,
+    frekuensi varchar(50) NOT NULL,
+    interval_hari int NULL,
+    tanggal_mulai timestamptz DEFAULT now() NOT NULL, -- Diubah dari datetime
+    tanggal_selesai date NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_jadwal_tindakan PRIMARY KEY (id_jadwal_tindakan),
+    CONSTRAINT fk_jadwal_tindakan_sub
+        FOREIGN KEY(id_sub_tindakan)
+        REFERENCES public.ops_sub_tindakan(id_sub_tindakan)
+        ON DELETE SET NULL
+);
+
+---
+
+-- 5. Membuat tabel 'ops_eksekusi_tindakan' (Tergantung pada 'ops_jadwal_tindakan')
+CREATE TABLE public.ops_eksekusi_tindakan (
+    id_eksekusi_tindakan uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_jadwal_tindakan uuid NULL,
+    tanggal_eksekusi date NOT NULL,
+    hasil varchar(255) NULL,
+    petugas varchar(100) NULL,
+    catatan varchar(255) NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_eksekusi_tindakan PRIMARY KEY (id_eksekusi_tindakan),
+    CONSTRAINT fk_eksekusi_tindakan_jadwal
+        FOREIGN KEY(id_jadwal_tindakan)
+        REFERENCES public.ops_jadwal_tindakan(id_jadwal_tindakan)
+        ON DELETE SET NULL -- atau ON DELETE CASCADE jika eksekusi harus ikut terhapus
+);
+
+---
+
+-- 6. Membuat tabel 'ops_spk_tindakan' (Tergantung pada 'ops_jadwal_tindakan')
+CREATE TABLE public.ops_spk_tindakan (
+    id_spk uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_jadwal_tindakan uuid NULL,
+    nomor_spk varchar(100) NOT NULL,
+    tanggal_terbit date NOT NULL,
+    tanggal_mulai date NOT NULL,
+    tanggal_selesai date NULL,
+    status varchar(50) DEFAULT 'DRAFT' NOT NULL,
+    penanggung_jawab varchar(100) NULL,
+    mandor varchar(100) NULL,
+    lokasi varchar(255) NULL,
+    uraian_pekerjaan varchar(255) NULL,
+    catatan varchar(255) NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_spk_tindakan PRIMARY KEY (id_spk),
+    CONSTRAINT fk_spk_tindakan_jadwal
+        FOREIGN KEY(id_jadwal_tindakan)
+        REFERENCES public.ops_jadwal_tindakan(id_jadwal_tindakan)
+        ON DELETE SET NULL
+);

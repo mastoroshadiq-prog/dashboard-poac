@@ -1,0 +1,73 @@
+-- 1. Mengaktifkan ekstensi untuk menghasilkan UUID (jika belum)
+-- Supabase biasanya sudah mengaktifkan ini, tetapi ini adalah praktik yang baik.
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+---
+
+-- 2. Membuat tabel 'sop_tipe'
+-- (Dibuat terlebih dahulu karena tabel lain bergantung padanya)
+CREATE TABLE public.sop_tipe (
+    id_tipe_sop uuid DEFAULT uuid_generate_v4() NOT NULL,
+    nama_tipe_sop varchar(100) NOT NULL,
+    deskripsi text NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_sop_tipe PRIMARY KEY (id_tipe_sop)
+);
+
+---
+
+-- 3. Membuat tabel 'sop_referensi'
+CREATE TABLE public.sop_referensi (
+    id_sop uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_tipe_sop uuid NULL,
+    nama_sop varchar(100) NOT NULL,
+    deskripsi text NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_sop_referensi PRIMARY KEY (id_sop),
+    CONSTRAINT fk_sop_referensi_tipe
+        FOREIGN KEY(id_tipe_sop)
+        REFERENCES public.sop_tipe(id_tipe_sop)
+);
+
+---
+
+-- 4. Membuat tabel 'sop_referensi_versi'
+CREATE TABLE public.sop_referensi_versi (
+    id_sop_referensi_versi uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_sop uuid NULL,
+    versi varchar(10) NOT NULL,
+    from_date date NOT NULL,
+    thru_date date NULL,
+    dok_url varchar(255) NULL,
+    catatan text NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_sop_referensi_versi PRIMARY KEY (id_sop_referensi_versi),
+    CONSTRAINT fk_sop_referensi_versi_sop
+        FOREIGN KEY(id_sop)
+        REFERENCES public.sop_referensi(id_sop)
+        ON DELETE SET NULL -- Opsional: jika SOP induk dihapus, set ID di sini ke NULL
+);
+
+---
+
+-- 5. Membuat tabel 'sop_tipe_versi'
+CREATE TABLE public.sop_tipe_versi (
+    id_tipe_sop_versi uuid DEFAULT uuid_generate_v4() NOT NULL,
+    id_tipe_sop uuid NULL,
+    versi varchar(10) NOT NULL,
+    tgl_versi date NOT NULL,
+    from_date date NOT NULL,
+    thru_date date NULL,
+    dok_url varchar(255) NULL,
+    catatan text NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz NULL,
+    CONSTRAINT plant_pk_sop_tipe_versi PRIMARY KEY (id_tipe_sop_versi),
+    CONSTRAINT fk_sop_tipe_versi_tipe
+        FOREIGN KEY(id_tipe_sop)
+        REFERENCES public.sop_tipe(id_tipe_sop)
+        ON DELETE SET NULL -- Opsional: jika Tipe SOP induk dihapus, set ID di sini ke NULL
+);
