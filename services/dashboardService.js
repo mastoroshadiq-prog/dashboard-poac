@@ -269,65 +269,32 @@ async function calculateTrenKepatuhanSop() {
   try {
     console.log('🔍 [ENHANCEMENT] Calculating Tren Kepatuhan SOP...');
     
-    // Query all tasks from last 8 weeks
-    const eightWeeksAgo = new Date();
-    eightWeeksAgo.setDate(eightWeeksAgo.getDate() - (8 * 7));
-    
+    // Query historical trend data from spk_header
+    // Schema: spk_header dengan week_number dan compliance_percentage
     const { data, error } = await supabase
-      .from('spk_tugas')
-      .select('created_at, status_tugas')
-      .gte('created_at', eightWeeksAgo.toISOString())
-      .order('created_at', { ascending: true });
+      .from('spk_header')
+      .select('week_number, compliance_percentage, tanggal_target_selesai')
+      .like('nama_spk', 'DUMMY_TREND_%')
+      .order('week_number', { ascending: true });
     
     if (error) throw error;
     
     if (!data || data.length === 0) {
-      console.log('⚠️  No tasks found in last 8 weeks for trend analysis');
-      // Return current week only
+      console.log('⚠️  No historical trend data found. Returning current compliance only');
+      // Fallback: return current compliance
       const currentCompliance = await calculateKriKepatuhanSop();
       return [{ periode: 'Week 1', nilai: currentCompliance }];
     }
     
-    // Group by week
-    const weeklyData = {};
-    
-    data.forEach(task => {
-      const taskDate = new Date(task.created_at);
-      // Calculate week number (ISO week)
-      const weekStart = new Date(taskDate);
-      weekStart.setDate(taskDate.getDate() - taskDate.getDay()); // Start of week (Sunday)
-      const weekKey = weekStart.toISOString().split('T')[0]; // YYYY-MM-DD
-      
-      if (!weeklyData[weekKey]) {
-        weeklyData[weekKey] = { total: 0, selesai: 0 };
-      }
-      
-      weeklyData[weekKey].total += 1;
-      
-      const statusTrimmed = task.status_tugas?.trim().toUpperCase() || '';
-      if (statusTrimmed === 'SELESAI') {
-        weeklyData[weekKey].selesai += 1;
-      }
-    });
-    
-    // Convert to array and calculate percentages
-    const weeklyArray = Object.entries(weeklyData)
-      .map(([weekKey, stats]) => ({
-        weekKey,
-        nilai: stats.total > 0 
-          ? parseFloat(((stats.selesai / stats.total) * 100).toFixed(1))
-          : 0
-      }))
-      .sort((a, b) => new Date(a.weekKey) - new Date(b.weekKey)); // Sort chronologically
-    
-    // Format with period labels (Week 1, Week 2, etc.)
-    const trendResult = weeklyArray.map((item, index) => ({
-      periode: `Week ${index + 1}`,
-      nilai: item.nilai
+    // Format results
+    const trendResult = data.map(item => ({
+      periode: `Week ${item.week_number}`,
+      nilai: parseFloat(item.compliance_percentage),
+      tanggal: item.tanggal_target_selesai
     }));
     
-    console.log(`✅ Tren Kepatuhan SOP: ${trendResult.length} weeks`);
-    console.log('   Sample:', trendResult.slice(0, 3));
+    console.log(`✅ Tren Kepatuhan SOP: ${trendResult.length} weeks (from spk_header)`);
+    console.log('   Range:', trendResult[0]?.nilai, '% →', trendResult[trendResult.length - 1]?.nilai, '%');
     
     return trendResult;
     
@@ -458,6 +425,85 @@ async function calculatePlanningAccuracy() {
 }
 
 /**
+ * 📊 ENHANCEMENT: SOP Compliance Breakdown
+ * 
+ * Requirements: PERINTAH_KERJA_BACKEND_Dummy_Data_Injection.md #1
+ * Fetch compliant vs non-compliant SOP items dari master_pihak dengan tipe='SOP_ITEM'
+ * 
+ * SCHEMA: Menggunakan existing table master_pihak
+ * - tipe = 'SOP_ITEM'
+ * - nama = item name
+ * - sop_score = compliance score (0-100)
+ * - sop_category = COMPLIANT, NON_COMPLIANT, PARTIALLY_COMPLIANT
+ * - sop_reason = reason for non-compliance
+ * 
+ * Return:
+ * {
+ *   compliant_items: [{name, score}],
+ *   non_compliant_items: [{name, score, reason}],
+ *   partially_compliant_items: [{name, score, reason}]
+ * }
+ */
+async function calculateSopComplianceBreakdown() {
+  try {
+    const { data, error } = await supabase
+      .from('master_pihak')
+      .select('nama, sop_category, sop_score, sop_reason')
+      .eq('tipe', 'SOP_ITEM')
+      .order('sop_score', { ascending: false });
+    
+    if (error) throw error;
+    
+    if (!data || data.length === 0) {
+      console.log('⚠️  No SOP compliance items found. Returning empty breakdown.');
+      return {
+        compliant_items: [],
+        non_compliant_items: [],
+        partially_compliant_items: []
+      };
+    }
+    
+    // Group by sop_category
+    const breakdown = {
+      compliant_items: data
+        .filter(item => item.sop_category === 'COMPLIANT')
+        .map(item => ({
+          name: item.nama,
+          score: parseFloat(item.sop_score)
+        })),
+      
+      non_compliant_items: data
+        .filter(item => item.sop_category === 'NON_COMPLIANT')
+        .map(item => ({
+          name: item.nama,
+          score: parseFloat(item.sop_score),
+          reason: item.sop_reason || 'No reason specified'
+        })),
+      
+      partially_compliant_items: data
+        .filter(item => item.sop_category === 'PARTIALLY_COMPLIANT')
+        .map(item => ({
+          name: item.nama,
+          score: parseFloat(item.sop_score),
+          reason: item.sop_reason || 'No reason specified'
+        }))
+    };
+    
+    console.log(`✅ SOP Compliance Breakdown: ${breakdown.compliant_items.length} compliant, ${breakdown.non_compliant_items.length} non-compliant, ${breakdown.partially_compliant_items.length} partial`);
+    
+    return breakdown;
+    
+  } catch (err) {
+    console.error('❌ Error calculating SOP compliance breakdown:', err.message);
+    return {
+      compliant_items: [],
+      non_compliant_items: [],
+      partially_compliant_items: []
+    };
+  }
+}
+
+/**
  * MAIN SERVICE FUNCTION: Get All KPI Eksekutif
  * 
  * Menggabungkan semua KPI/KRI dalam satu response
@@ -466,6 +512,7 @@ async function calculatePlanningAccuracy() {
  * ENHANCED with:
  * - tren_kepatuhan_sop (time series, 8 weeks)
  * - planning_accuracy (last month vs current month)
+ * - sop_compliance_breakdown (compliant vs non-compliant items)
  */
 async function getKpiEksekutif(filters = {}) {
   try {
@@ -476,14 +523,16 @@ async function getKpiEksekutif(filters = {}) {
       trenInsidensiG1,
       trenG4Aktif,
       trenKepatuhanSop,
-      planningAccuracy
+      planningAccuracy,
+      sopComplianceBreakdown  // ✨ NEW: SOP breakdown detail
     ] = await Promise.all([
       calculateKriLeadTimeAph(),
       calculateKriKepatuhanSop(),
       calculateTrenInsidensiG1(),
       calculateG4Aktif(),
       calculateTrenKepatuhanSop(),
-      calculatePlanningAccuracy()
+      calculatePlanningAccuracy(),
+      calculateSopComplianceBreakdown()  // ✨ NEW
     ]);
     
     // Struktur response sesuai kontrak API
@@ -497,6 +546,7 @@ async function getKpiEksekutif(filters = {}) {
       // ⭐ NEW ENHANCEMENT FIELDS
       tren_kepatuhan_sop: trenKepatuhanSop,
       planning_accuracy: planningAccuracy,
+      sop_compliance_breakdown: sopComplianceBreakdown,  // ✨ NEW: compliant vs non-compliant detail
       
       // Metadata untuk debugging (5W1H - When)
       generated_at: new Date().toISOString(),
@@ -519,5 +569,6 @@ module.exports = {
   calculateG4Aktif,
   // Export enhancement functions
   calculateTrenKepatuhanSop,
-  calculatePlanningAccuracy
+  calculatePlanningAccuracy,
+  calculateSopComplianceBreakdown  // ✨ NEW export
 };

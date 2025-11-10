@@ -483,6 +483,113 @@ async function calculateResourceAllocation() {
 }
 
 /**
+ * 📊 ENHANCEMENT: Get Planning Tasks by Category
+ * 
+ * Requirements: PERINTAH_KERJA_BACKEND_Dummy_Data_Injection.md #3
+ * Fetch tasks dari spk_tugas (existing table dengan kolom tambahan)
+ * 
+ * SCHEMA: spk_tugas
+ * - tipe_tugas = VALIDASI_DRONE, APH, SANITASI
+ * - status_tugas = SELESAI (Done), DIKERJAKAN (In Progress), BARU (Pending)
+ * - task_description = task name
+ * - pic_name = person in charge
+ * - deadline = task deadline
+ * - task_priority = HIGH, MEDIUM, LOW
+ * 
+ * @param {String} category - VALIDASI_DRONE, APH, atau SANITASI
+ * @returns {Array} List of tasks with name, status, PIC, deadline, priority
+ */
+async function getTasksByCategory(category) {
+  try {
+    // Map category ke tipe_tugas
+    const categoryMap = {
+      'VALIDASI': 'VALIDASI_DRONE',
+      'APH': 'APH',
+      'SANITASI': 'SANITASI'
+    };
+    
+    const tipeTugas = categoryMap[category.toUpperCase()] || category.toUpperCase();
+    
+    const { data, error } = await supabase
+      .from('spk_tugas')
+      .select('task_description, status_tugas, pic_name, deadline, task_priority, id_pelaksana')
+      .eq('tipe_tugas', tipeTugas)
+      .in('id_spk', [
+        supabase.from('spk_header').select('id_spk').like('nama_spk', 'DUMMY_Planning_%')
+      ])
+      .order('deadline', { ascending: true });
+    
+    if (error) throw error;
+    
+    // Map status_tugas to frontend format
+    const statusMap = {
+      'SELESAI': 'Done',
+      'DIKERJAKAN': 'In Progress',
+      'BARU': 'Pending'
+    };
+    
+    const tasks = (data || []).map(task => ({
+      name: task.task_description,
+      status: statusMap[task.status_tugas?.trim().toUpperCase()] || 'Pending',
+      pic: task.pic_name,
+      deadline: task.deadline,
+      priority: task.task_priority?.toLowerCase() || 'medium'
+    }));
+    
+    console.log(`✅ Tasks for ${category}: ${tasks.length} items`);
+    
+    return tasks;
+    
+  } catch (err) {
+    console.error(`❌ Error fetching tasks for ${category}:`, err.message);
+    return [];
+  }
+}
+
+/**
+ * 📊 ENHANCEMENT: Get Planning Blockers by Category
+ * 
+ * Requirements: PERINTAH_KERJA_BACKEND_Dummy_Data_Injection.md #4
+ * Fetch blockers dari spk_header (existing table dengan kolom tambahan)
+ * 
+ * SCHEMA: spk_header
+ * - nama_spk LIKE 'DUMMY_BLOCKER_{category}_%'
+ * - blocker_description = blocker detail
+ * - blocker_severity = HIGH, MEDIUM, LOW
+ * - tanggal_target = identified date
+ * 
+ * @param {String} category - VALIDASI, APH, atau SANITASI
+ * @returns {Array} List of blockers with description, severity, status
+ */
+async function getBlockersByCategory(category) {
+  try {
+    const { data, error } = await supabase
+      .from('spk_header')
+      .select('blocker_description, blocker_severity, tanggal_target_selesai')
+      .like('nama_spk', `DUMMY_BLOCKER_${category.toUpperCase()}_%`)
+      .not('blocker_description', 'is', null)
+      .order('blocker_severity', { ascending: true });  // HIGH first
+    
+    if (error) throw error;
+    
+    const blockers = (data || []).map(blocker => ({
+      description: blocker.blocker_description,
+      severity: blocker.blocker_severity,
+      status: 'OPEN',  // All blockers are active
+      since: blocker.tanggal_target_selesai
+    }));
+    
+    console.log(`✅ Blockers for ${category}: ${blockers.length} items`);
+    
+    return blockers;
+    
+  } catch (err) {
+    console.error(`❌ Error fetching blockers for ${category}:`, err.message);
+    return [];
+  }
+}
+
+/**
  * MAIN SERVICE FUNCTION: Get Dashboard Operasional
  * 
  * Menggabungkan semua data operasional dalam satu response
@@ -506,12 +613,24 @@ async function getDashboardOperasional(filters = {}) {
       dataCorong, 
       dataPapanPeringkat,
       deadlines,
-      resourceAllocation
+      resourceAllocation,
+      validasiTasks,     // ✨ NEW: Fetch planning tasks
+      aphTasks,
+      sanitasiTasks,
+      validasiBlockersDb,  // ✨ NEW: Fetch database blockers
+      aphBlockersDb,
+      sanitasiBlockersDb
     ] = await Promise.all([
       calculateDataCorong(),
       calculatePapanPeringkat(),
       calculateDeadlines(),
-      calculateResourceAllocation()
+      calculateResourceAllocation(),
+      getTasksByCategory('VALIDASI'),      // ✨ NEW
+      getTasksByCategory('APH'),            // ✨ NEW
+      getTasksByCategory('SANITASI'),       // ✨ NEW
+      getBlockersByCategory('VALIDASI'),    // ✨ NEW
+      getBlockersByCategory('APH'),         // ✨ NEW
+      getBlockersByCategory('SANITASI')     // ✨ NEW
     ]);
     
     // Calculate risk levels (synchronous - based on data we already have)
@@ -585,7 +704,7 @@ async function getDashboardOperasional(filters = {}) {
         risk_level_aph: riskLevelAph,
         risk_level_sanitasi: riskLevelSanitasi,
         
-        // ⭐ NEW ENHANCEMENT FIELDS - Blockers
+        // ⭐ NEW ENHANCEMENT FIELDS - Blockers (calculated)
         blockers_validasi: blockersValidasi,
         blockers_aph: blockersAph,
         blockers_sanitasi: blockersSanitasi,
@@ -593,7 +712,17 @@ async function getDashboardOperasional(filters = {}) {
         // ⭐ NEW ENHANCEMENT FIELDS - Resource Allocation
         pelaksana_assigned_validasi: resourceAllocation.pelaksana_assigned_validasi,
         pelaksana_assigned_aph: resourceAllocation.pelaksana_assigned_aph,
-        pelaksana_assigned_sanitasi: resourceAllocation.pelaksana_assigned_sanitasi
+        pelaksana_assigned_sanitasi: resourceAllocation.pelaksana_assigned_sanitasi,
+        
+        // ✨ NEW DRILL-DOWN FIELDS - Planning Tasks
+        validasi_tasks: validasiTasks,
+        aph_tasks: aphTasks,
+        sanitasi_tasks: sanitasiTasks,
+        
+        // ✨ NEW DRILL-DOWN FIELDS - Database Blockers (detailed)
+        validasi_blockers_detail: validasiBlockersDb,
+        aph_blockers_detail: aphBlockersDb,
+        sanitasi_blockers_detail: sanitasiBlockersDb
       },
       data_papan_peringkat: dataPapanPeringkat,
       // Metadata untuk debugging (5W1H - When)
@@ -616,5 +745,8 @@ module.exports = {
   calculateDeadlines,
   calculateRiskLevel,
   detectBlockers,
-  calculateResourceAllocation
+  calculateResourceAllocation,
+  // Export drill-down functions (NEW)
+  getTasksByCategory,
+  getBlockersByCategory
 };
