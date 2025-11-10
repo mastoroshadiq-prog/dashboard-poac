@@ -181,27 +181,420 @@ async function calculatePapanPeringkat() {
 }
 
 /**
+ * ENHANCEMENT: Calculate Deadlines for Each Category
+ * 
+ * Logika:
+ * - Query spk_header.tanggal_target untuk SPK yang memiliki incomplete tasks
+ * - Group by tipe_tugas (VALIDASI, APH, SANITASI)
+ * - Return ISO 8601 date string (YYYY-MM-DD)
+ * 
+ * Note: Using 2-step query because Supabase nested select has column naming issues
+ */
+async function calculateDeadlines() {
+  try {
+    console.log('🔍 [ENHANCEMENT] Calculating Deadlines...');
+    
+    // Step 1: Get all incomplete tasks
+    const { data: incompleteTasks, error: tasksError } = await supabase
+      .from('spk_tugas')
+      .select('id_spk, tipe_tugas')
+      .neq('status_tugas', 'SELESAI');
+    
+    if (tasksError) throw tasksError;
+    
+    if (!incompleteTasks || incompleteTasks.length === 0) {
+      console.log('⚠️  No incomplete tasks found');
+      return {
+        deadline_validasi: null,
+        deadline_aph: null,
+        deadline_sanitasi: null
+      };
+    }
+    
+    // Step 2: Get SPK headers for these tasks
+    const spkIds = [...new Set(incompleteTasks.map(t => t.id_spk))];
+    
+    const { data: spkHeaders, error: headersError } = await supabase
+      .from('spk_header')
+      .select('id_spk, tanggal_target')
+      .in('id_spk', spkIds);
+    
+    if (headersError) throw headersError;
+    
+    if (!spkHeaders || spkHeaders.length === 0) {
+      console.log('⚠️  No SPK headers found');
+      return {
+        deadline_validasi: null,
+        deadline_aph: null,
+        deadline_sanitasi: null
+      };
+    }
+    
+    // Create SPK ID to deadline map
+    const spkDeadlineMap = {};
+    spkHeaders.forEach(spk => {
+      spkDeadlineMap[spk.id_spk] = spk.tanggal_target;
+    });
+    
+    // Group deadlines by category and find earliest
+    let earliestValidasi = null;
+    let earliestAph = null;
+    let earliestSanitasi = null;
+    
+    incompleteTasks.forEach(task => {
+      const tipe = task.tipe_tugas?.trim().toUpperCase() || '';
+      const deadline = spkDeadlineMap[task.id_spk];
+      
+      if (!deadline) return;
+      
+      const deadlineDate = new Date(deadline);
+      
+      if (tipe.includes('VALIDASI') || tipe.includes('DRONE')) {
+        if (!earliestValidasi || deadlineDate < new Date(earliestValidasi)) {
+          earliestValidasi = deadline;
+        }
+      } else if (tipe === 'APH') {
+        if (!earliestAph || deadlineDate < new Date(earliestAph)) {
+          earliestAph = deadline;
+        }
+      } else if (tipe.includes('SANITASI')) {
+        if (!earliestSanitasi || deadlineDate < new Date(earliestSanitasi)) {
+          earliestSanitasi = deadline;
+        }
+      }
+    });
+    
+    // Format to YYYY-MM-DD
+    const formatDate = (dateStr) => {
+      if (!dateStr) return null;
+      return new Date(dateStr).toISOString().split('T')[0];
+    };
+    
+    const result = {
+      deadline_validasi: formatDate(earliestValidasi),
+      deadline_aph: formatDate(earliestAph),
+      deadline_sanitasi: formatDate(earliestSanitasi)
+    };
+    
+    console.log('✅ Deadlines:', result);
+    
+    return result;
+    
+  } catch (err) {
+    console.error('❌ Error calculating Deadlines:', err.message);
+    return {
+      deadline_validasi: null,
+      deadline_aph: null,
+      deadline_sanitasi: null
+    };
+  }
+}
+
+/**
+ * ENHANCEMENT: Calculate Risk Level for Each Category
+ * 
+ * Business Rules:
+ * - CRITICAL: Overdue OR No workers assigned OR (Progress < 30% AND < 7 days left)
+ * - MEDIUM: Progress < 70% AND < 14 days left
+ * - LOW: Progress >= 70% OR > 14 days left
+ * 
+ * @param {string} category - 'VALIDASI', 'APH', or 'SANITASI'
+ * @param {number} target - Total tasks
+ * @param {number} selesai - Completed tasks
+ * @param {string|null} deadline - ISO date string
+ * @param {number} pelaksanaAssigned - Number of workers assigned
+ * @returns {string} 'LOW', 'MEDIUM', or 'CRITICAL'
+ */
+function calculateRiskLevel(category, target, selesai, deadline, pelaksanaAssigned) {
+  try {
+    // Default to MEDIUM if no data
+    if (target === 0) return 'LOW';
+    
+    const progress = selesai / target;
+    
+    // Calculate days to deadline
+    let daysToDeadline = null;
+    if (deadline) {
+      const deadlineDate = new Date(deadline);
+      const now = new Date();
+      const diffMs = deadlineDate - now;
+      daysToDeadline = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    }
+    
+    // Rule 1: Already overdue
+    if (daysToDeadline !== null && daysToDeadline < 0) {
+      return 'CRITICAL';
+    }
+    
+    // Rule 2: No workers assigned and not 100% complete
+    if (pelaksanaAssigned === 0 && progress < 1.0) {
+      return 'CRITICAL';
+    }
+    
+    // Rule 3: Low progress with approaching deadline
+    if (daysToDeadline !== null && progress < 0.3 && daysToDeadline < 7) {
+      return 'CRITICAL';
+    }
+    
+    // Rule 4: Medium progress with some time left
+    if (daysToDeadline !== null && progress < 0.7 && daysToDeadline < 14) {
+      return 'MEDIUM';
+    }
+    
+    // Rule 5: On track
+    if (progress >= 0.7 || daysToDeadline === null || daysToDeadline > 14) {
+      return 'LOW';
+    }
+    
+    return 'MEDIUM'; // Default
+    
+  } catch (err) {
+    console.error(`❌ Error calculating risk level for ${category}:`, err.message);
+    return 'MEDIUM';
+  }
+}
+
+/**
+ * ENHANCEMENT: Detect Blockers for Each Category
+ * 
+ * Checks:
+ * 1. Overdue tasks
+ * 2. No pelaksana assigned
+ * 3. Pelaksana shortage (insufficient workers)
+ * 4. Stalled progress (no update in 3+ days)
+ * 
+ * @param {string} category - 'VALIDASI', 'APH', or 'SANITASI'
+ * @param {number} target - Total tasks
+ * @param {number} selesai - Completed tasks
+ * @param {string|null} deadline - ISO date string
+ * @param {number} pelaksanaAssigned - Number of workers assigned
+ * @returns {Array<string>} List of blocker messages
+ */
+function detectBlockers(category, target, selesai, deadline, pelaksanaAssigned) {
+  const blockers = [];
+  
+  try {
+    const progress = selesai / target;
+    
+    // Calculate days to deadline
+    let daysToDeadline = null;
+    if (deadline) {
+      const deadlineDate = new Date(deadline);
+      const now = new Date();
+      const diffMs = deadlineDate - now;
+      daysToDeadline = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    }
+    
+    // Check 1: Overdue
+    if (daysToDeadline !== null && daysToDeadline < 0) {
+      blockers.push(`Deadline passed by ${Math.abs(daysToDeadline)} days`);
+    }
+    
+    // Check 2: No pelaksana assigned
+    if (pelaksanaAssigned === 0 && target > 0 && progress < 1.0) {
+      blockers.push('No pelaksana assigned yet');
+    }
+    
+    // Check 3: Insufficient workers (assume 3 tasks per worker)
+    if (target > 0 && progress < 0.5) {
+      const requiredWorkers = Math.ceil(target / 3);
+      if (pelaksanaAssigned > 0 && pelaksanaAssigned < requiredWorkers) {
+        const shortage = requiredWorkers - pelaksanaAssigned;
+        blockers.push(`Pelaksana shortage (need ${shortage} more workers)`);
+      }
+    }
+    
+    // Note: Check 4 (stalled progress) would require querying updated_at timestamps
+    // Skipped for now to maintain performance
+    
+  } catch (err) {
+    console.error(`❌ Error detecting blockers for ${category}:`, err.message);
+  }
+  
+  return blockers;
+}
+
+/**
+ * ENHANCEMENT: Calculate Resource Allocation (Pelaksana Count)
+ * 
+ * Logika:
+ * - COUNT DISTINCT id_pelaksana per category
+ * - Only count incomplete tasks (not SELESAI)
+ */
+async function calculateResourceAllocation() {
+  try {
+    console.log('🔍 [ENHANCEMENT] Calculating Resource Allocation...');
+    
+    // Query all incomplete tasks
+    const { data, error } = await supabase
+      .from('spk_tugas')
+      .select('tipe_tugas, id_pelaksana, status_tugas')
+      .neq('status_tugas', 'SELESAI')
+      .not('id_pelaksana', 'is', null);
+    
+    if (error) throw error;
+    
+    if (!data || data.length === 0) {
+      return {
+        pelaksana_assigned_validasi: 0,
+        pelaksana_assigned_aph: 0,
+        pelaksana_assigned_sanitasi: 0
+      };
+    }
+    
+    // Use Sets to count unique pelaksana per category
+    const validasiPelaksana = new Set();
+    const aphPelaksana = new Set();
+    const sanitasiPelaksana = new Set();
+    
+    data.forEach(task => {
+      const tipe = task.tipe_tugas?.trim().toUpperCase() || '';
+      const pelaksana = task.id_pelaksana;
+      
+      if (!pelaksana) return;
+      
+      if (tipe.includes('VALIDASI') || tipe.includes('DRONE')) {
+        validasiPelaksana.add(pelaksana);
+      } else if (tipe === 'APH') {
+        aphPelaksana.add(pelaksana);
+      } else if (tipe.includes('SANITASI')) {
+        sanitasiPelaksana.add(pelaksana);
+      }
+    });
+    
+    const result = {
+      pelaksana_assigned_validasi: validasiPelaksana.size,
+      pelaksana_assigned_aph: aphPelaksana.size,
+      pelaksana_assigned_sanitasi: sanitasiPelaksana.size
+    };
+    
+    console.log('✅ Resource Allocation:', result);
+    
+    return result;
+    
+  } catch (err) {
+    console.error('❌ Error calculating Resource Allocation:', err.message);
+    return {
+      pelaksana_assigned_validasi: 0,
+      pelaksana_assigned_aph: 0,
+      pelaksana_assigned_sanitasi: 0
+    };
+  }
+}
+
+/**
  * MAIN SERVICE FUNCTION: Get Dashboard Operasional
  * 
  * Menggabungkan semua data operasional dalam satu response
  * Sesuai kontrak API: GET /api/v1/dashboard/operasional
+ * 
+ * ENHANCED with:
+ * - deadline_{validasi, aph, sanitasi}
+ * - risk_level_{validasi, aph, sanitasi}
+ * - blockers_{validasi, aph, sanitasi}
+ * - pelaksana_assigned_{validasi, aph, sanitasi}
  * 
  * @param {Object} filters - Optional filters (divisi, tanggal, dll)
  * @returns {Object} Dashboard operasional data
  */
 async function getDashboardOperasional(filters = {}) {
   try {
-    console.log('🚀 [START] Get Dashboard Operasional', { filters });
+    console.log('🚀 [START] Get Dashboard Operasional (Enhanced)', { filters });
     
     // Prinsip SKALABILITAS: Run queries in parallel
-    const [dataCorong, dataPapanPeringkat] = await Promise.all([
+    const [
+      dataCorong, 
+      dataPapanPeringkat,
+      deadlines,
+      resourceAllocation
+    ] = await Promise.all([
       calculateDataCorong(),
-      calculatePapanPeringkat()
+      calculatePapanPeringkat(),
+      calculateDeadlines(),
+      calculateResourceAllocation()
     ]);
     
-    // Struktur response sesuai kontrak API
+    // Calculate risk levels (synchronous - based on data we already have)
+    const riskLevelValidasi = calculateRiskLevel(
+      'VALIDASI',
+      dataCorong.target_validasi,
+      dataCorong.validasi_selesai,
+      deadlines.deadline_validasi,
+      resourceAllocation.pelaksana_assigned_validasi
+    );
+    
+    const riskLevelAph = calculateRiskLevel(
+      'APH',
+      dataCorong.target_aph,
+      dataCorong.aph_selesai,
+      deadlines.deadline_aph,
+      resourceAllocation.pelaksana_assigned_aph
+    );
+    
+    const riskLevelSanitasi = calculateRiskLevel(
+      'SANITASI',
+      dataCorong.target_sanitasi,
+      dataCorong.sanitasi_selesai,
+      deadlines.deadline_sanitasi,
+      resourceAllocation.pelaksana_assigned_sanitasi
+    );
+    
+    // Detect blockers (synchronous - based on data we already have)
+    const blockersValidasi = detectBlockers(
+      'VALIDASI',
+      dataCorong.target_validasi,
+      dataCorong.validasi_selesai,
+      deadlines.deadline_validasi,
+      resourceAllocation.pelaksana_assigned_validasi
+    );
+    
+    const blockersAph = detectBlockers(
+      'APH',
+      dataCorong.target_aph,
+      dataCorong.aph_selesai,
+      deadlines.deadline_aph,
+      resourceAllocation.pelaksana_assigned_aph
+    );
+    
+    const blockersSanitasi = detectBlockers(
+      'SANITASI',
+      dataCorong.target_sanitasi,
+      dataCorong.sanitasi_selesai,
+      deadlines.deadline_sanitasi,
+      resourceAllocation.pelaksana_assigned_sanitasi
+    );
+    
+    // Struktur response sesuai kontrak API (ENHANCED)
     return {
-      data_corong: dataCorong,
+      data_corong: {
+        // EXISTING FIELDS (backward compatible)
+        target_validasi: dataCorong.target_validasi,
+        validasi_selesai: dataCorong.validasi_selesai,
+        target_aph: dataCorong.target_aph,
+        aph_selesai: dataCorong.aph_selesai,
+        target_sanitasi: dataCorong.target_sanitasi,
+        sanitasi_selesai: dataCorong.sanitasi_selesai,
+        
+        // ⭐ NEW ENHANCEMENT FIELDS - Deadlines
+        deadline_validasi: deadlines.deadline_validasi,
+        deadline_aph: deadlines.deadline_aph,
+        deadline_sanitasi: deadlines.deadline_sanitasi,
+        
+        // ⭐ NEW ENHANCEMENT FIELDS - Risk Levels
+        risk_level_validasi: riskLevelValidasi,
+        risk_level_aph: riskLevelAph,
+        risk_level_sanitasi: riskLevelSanitasi,
+        
+        // ⭐ NEW ENHANCEMENT FIELDS - Blockers
+        blockers_validasi: blockersValidasi,
+        blockers_aph: blockersAph,
+        blockers_sanitasi: blockersSanitasi,
+        
+        // ⭐ NEW ENHANCEMENT FIELDS - Resource Allocation
+        pelaksana_assigned_validasi: resourceAllocation.pelaksana_assigned_validasi,
+        pelaksana_assigned_aph: resourceAllocation.pelaksana_assigned_aph,
+        pelaksana_assigned_sanitasi: resourceAllocation.pelaksana_assigned_sanitasi
+      },
       data_papan_peringkat: dataPapanPeringkat,
       // Metadata untuk debugging (5W1H - When)
       generated_at: new Date().toISOString(),
@@ -218,5 +611,10 @@ async function getDashboardOperasional(filters = {}) {
 module.exports = {
   getDashboardOperasional,
   calculateDataCorong,
-  calculatePapanPeringkat
+  calculatePapanPeringkat,
+  // Export enhancement functions
+  calculateDeadlines,
+  calculateRiskLevel,
+  detectBlockers,
+  calculateResourceAllocation
 };

@@ -251,10 +251,221 @@ async function calculateG4Aktif() {
 }
 
 /**
+ * 5. ENHANCEMENT: Tren Kepatuhan SOP (Time Series - 8 Weeks)
+ * 
+ * Logika:
+ * - Query spk_tugas dengan GROUP BY week
+ * - Calculate completion rate per week: (SELESAI / TOTAL) * 100
+ * - Return array of {periode, nilai} for last 8 weeks
+ * 
+ * Expected Output:
+ * [
+ *   {periode: "Week 1", nilai: 15.0},
+ *   {periode: "Week 2", nilai: 18.5},
+ *   ...
+ * ]
+ */
+async function calculateTrenKepatuhanSop() {
+  try {
+    console.log('🔍 [ENHANCEMENT] Calculating Tren Kepatuhan SOP...');
+    
+    // Query all tasks from last 8 weeks
+    const eightWeeksAgo = new Date();
+    eightWeeksAgo.setDate(eightWeeksAgo.getDate() - (8 * 7));
+    
+    const { data, error } = await supabase
+      .from('spk_tugas')
+      .select('created_at, status_tugas')
+      .gte('created_at', eightWeeksAgo.toISOString())
+      .order('created_at', { ascending: true });
+    
+    if (error) throw error;
+    
+    if (!data || data.length === 0) {
+      console.log('⚠️  No tasks found in last 8 weeks for trend analysis');
+      // Return current week only
+      const currentCompliance = await calculateKriKepatuhanSop();
+      return [{ periode: 'Week 1', nilai: currentCompliance }];
+    }
+    
+    // Group by week
+    const weeklyData = {};
+    
+    data.forEach(task => {
+      const taskDate = new Date(task.created_at);
+      // Calculate week number (ISO week)
+      const weekStart = new Date(taskDate);
+      weekStart.setDate(taskDate.getDate() - taskDate.getDay()); // Start of week (Sunday)
+      const weekKey = weekStart.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      if (!weeklyData[weekKey]) {
+        weeklyData[weekKey] = { total: 0, selesai: 0 };
+      }
+      
+      weeklyData[weekKey].total += 1;
+      
+      const statusTrimmed = task.status_tugas?.trim().toUpperCase() || '';
+      if (statusTrimmed === 'SELESAI') {
+        weeklyData[weekKey].selesai += 1;
+      }
+    });
+    
+    // Convert to array and calculate percentages
+    const weeklyArray = Object.entries(weeklyData)
+      .map(([weekKey, stats]) => ({
+        weekKey,
+        nilai: stats.total > 0 
+          ? parseFloat(((stats.selesai / stats.total) * 100).toFixed(1))
+          : 0
+      }))
+      .sort((a, b) => new Date(a.weekKey) - new Date(b.weekKey)); // Sort chronologically
+    
+    // Format with period labels (Week 1, Week 2, etc.)
+    const trendResult = weeklyArray.map((item, index) => ({
+      periode: `Week ${index + 1}`,
+      nilai: item.nilai
+    }));
+    
+    console.log(`✅ Tren Kepatuhan SOP: ${trendResult.length} weeks`);
+    console.log('   Sample:', trendResult.slice(0, 3));
+    
+    return trendResult;
+    
+  } catch (err) {
+    console.error('❌ Error calculating Tren Kepatuhan SOP:', err.message);
+    // Fallback: return current compliance only
+    const currentCompliance = await calculateKriKepatuhanSop();
+    return [{ periode: 'Week 1', nilai: currentCompliance }];
+  }
+}
+
+/**
+ * 6. ENHANCEMENT: Planning Accuracy (Historical Metrics)
+ * 
+ * Logika:
+ * - Compare last month vs current month task completion
+ * - Calculate accuracy percentage: (actual / target) * 100
+ * - Project final accuracy based on daily velocity
+ * 
+ * Expected Output:
+ * {
+ *   last_month: { target_completion: 85, actual_completion: 72, accuracy_percentage: 84.7 },
+ *   current_month: { target_completion: 20, actual_completion: 7, accuracy_percentage: 35.0, projected_final_accuracy: 42.5 }
+ * }
+ */
+async function calculatePlanningAccuracy() {
+  try {
+    console.log('🔍 [ENHANCEMENT] Calculating Planning Accuracy...');
+    
+    const now = new Date();
+    
+    // Last month date range
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+    
+    // Current month date range
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    
+    // Query last month tasks
+    const { data: lastMonthTasks, error: lastMonthError } = await supabase
+      .from('spk_tugas')
+      .select('status_tugas')
+      .gte('created_at', lastMonthStart.toISOString())
+      .lte('created_at', lastMonthEnd.toISOString());
+    
+    if (lastMonthError) throw lastMonthError;
+    
+    // Query current month tasks
+    const { data: currentMonthTasks, error: currentMonthError } = await supabase
+      .from('spk_tugas')
+      .select('status_tugas, created_at')
+      .gte('created_at', currentMonthStart.toISOString())
+      .lte('created_at', currentMonthEnd.toISOString());
+    
+    if (currentMonthError) throw currentMonthError;
+    
+    // Calculate last month stats
+    const lastMonthTotal = lastMonthTasks?.length || 0;
+    const lastMonthCompleted = lastMonthTasks?.filter(t => 
+      t.status_tugas?.trim().toUpperCase() === 'SELESAI'
+    ).length || 0;
+    const lastMonthAccuracy = lastMonthTotal > 0 
+      ? parseFloat(((lastMonthCompleted / lastMonthTotal) * 100).toFixed(1))
+      : 0;
+    
+    // Calculate current month stats
+    const currentMonthTotal = currentMonthTasks?.length || 0;
+    const currentMonthCompleted = currentMonthTasks?.filter(t => 
+      t.status_tugas?.trim().toUpperCase() === 'SELESAI'
+    ).length || 0;
+    const currentMonthAccuracy = currentMonthTotal > 0 
+      ? parseFloat(((currentMonthCompleted / currentMonthTotal) * 100).toFixed(1))
+      : 0;
+    
+    // Calculate projected final accuracy (simple linear projection)
+    const daysInMonth = currentMonthEnd.getDate();
+    const currentDay = now.getDate();
+    const remainingDays = daysInMonth - currentDay;
+    
+    let projectedFinalAccuracy = currentMonthAccuracy;
+    
+    if (currentDay > 0 && currentMonthTotal > 0) {
+      // Daily completion rate
+      const dailyCompletionRate = currentMonthCompleted / currentDay;
+      // Projected total completions by end of month
+      const projectedCompletions = currentMonthCompleted + (dailyCompletionRate * remainingDays);
+      projectedFinalAccuracy = parseFloat(((projectedCompletions / currentMonthTotal) * 100).toFixed(1));
+      
+      // Cap at 100%
+      if (projectedFinalAccuracy > 100) projectedFinalAccuracy = 100.0;
+    }
+    
+    const result = {
+      last_month: {
+        target_completion: lastMonthTotal,
+        actual_completion: lastMonthCompleted,
+        accuracy_percentage: lastMonthAccuracy
+      },
+      current_month: {
+        target_completion: currentMonthTotal,
+        actual_completion: currentMonthCompleted,
+        accuracy_percentage: currentMonthAccuracy,
+        projected_final_accuracy: projectedFinalAccuracy
+      }
+    };
+    
+    console.log('✅ Planning Accuracy:', result);
+    
+    return result;
+    
+  } catch (err) {
+    console.error('❌ Error calculating Planning Accuracy:', err.message);
+    return {
+      last_month: {
+        target_completion: 0,
+        actual_completion: 0,
+        accuracy_percentage: 0.0
+      },
+      current_month: {
+        target_completion: 0,
+        actual_completion: 0,
+        accuracy_percentage: 0.0,
+        projected_final_accuracy: 0.0
+      }
+    };
+  }
+}
+
+/**
  * MAIN SERVICE FUNCTION: Get All KPI Eksekutif
  * 
  * Menggabungkan semua KPI/KRI dalam satu response
  * Sesuai kontrak API: GET /api/v1/dashboard/kpi_eksekutif
+ * 
+ * ENHANCED with:
+ * - tren_kepatuhan_sop (time series, 8 weeks)
+ * - planning_accuracy (last month vs current month)
  */
 async function getKpiEksekutif(filters = {}) {
   try {
@@ -263,20 +474,30 @@ async function getKpiEksekutif(filters = {}) {
       kriLeadTimeAph,
       kriKepatuhanSop,
       trenInsidensiG1,
-      trenG4Aktif
+      trenG4Aktif,
+      trenKepatuhanSop,
+      planningAccuracy
     ] = await Promise.all([
       calculateKriLeadTimeAph(),
       calculateKriKepatuhanSop(),
       calculateTrenInsidensiG1(),
-      calculateG4Aktif()
+      calculateG4Aktif(),
+      calculateTrenKepatuhanSop(),
+      calculatePlanningAccuracy()
     ]);
     
     // Struktur response sesuai kontrak API
     return {
+      // EXISTING FIELDS (backward compatible)
       kri_lead_time_aph: kriLeadTimeAph,
       kri_kepatuhan_sop: kriKepatuhanSop,
       tren_insidensi_baru: trenInsidensiG1,
       tren_g4_aktif: trenG4Aktif,
+      
+      // ⭐ NEW ENHANCEMENT FIELDS
+      tren_kepatuhan_sop: trenKepatuhanSop,
+      planning_accuracy: planningAccuracy,
+      
       // Metadata untuk debugging (5W1H - When)
       generated_at: new Date().toISOString(),
       // Filters yang digunakan (untuk future enhancement)
@@ -295,5 +516,8 @@ module.exports = {
   calculateKriLeadTimeAph,
   calculateKriKepatuhanSop,
   calculateTrenInsidensiG1,
-  calculateG4Aktif
+  calculateG4Aktif,
+  // Export enhancement functions
+  calculateTrenKepatuhanSop,
+  calculatePlanningAccuracy
 };

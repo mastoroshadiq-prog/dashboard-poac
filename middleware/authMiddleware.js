@@ -1,135 +1,186 @@
 /**
- * AUTH MIDDLEWARE - JWT Authentication
+ * AUTH MIDDLEWARE - Supabase JWT Authentication
  * 
  * KATEGORI: Tuntunan Keamanan (WAJIB untuk Platform A & B)
  * 
+ * RBAC FASE 3 (Revised): Using Supabase Auth
+ * - Verify JWT token dari Supabase Auth
+ * - Extract user role dari user_metadata atau master_pihak
+ * - Support production-grade authentication
+ * 
  * Filosofi MPP - Prinsip TEPAT:
  * - JANGAN PERCAYA input dari client (HP/Browser)
- * - Ambil user ID (WHO) dari JWT token, bukan dari request body
+ * - Ambil user ID (WHO) dari Supabase JWT token
  * - Timestamp dari server, bukan dari client
  * 
  * TUJUAN:
- * - Verifikasi JWT token dari header Authorization
- * - Extract user data (id_petugas/id_pelaksana) dari token
+ * - Verifikasi Supabase JWT token dari header Authorization
+ * - Extract user data (id, role, email) dari Supabase Auth
  * - Inject user data ke req.user untuk dipakai di endpoint
  * 
  * USAGE:
  * router.get('/protected-endpoint', authenticateJWT, async (req, res) => {
- *   const userId = req.user.id_pihak; // Dari JWT token
+ *   const userId = req.user.id_pihak; // Dari Supabase JWT
+ *   const role = req.user.role; // Dari user_metadata atau master_pihak
  *   // ...
  * });
  */
 
 const jwt = require('jsonwebtoken');
+const { supabase } = require('../config/supabase');
 
 /**
- * Middleware: Authenticate JWT Token
+ * Middleware: Authenticate Supabase JWT Token
  * 
  * FLOW:
  * 1. Extract token dari header "Authorization: Bearer <token>"
- * 2. Verify token dengan secret key
- * 3. Decode token payload dan inject ke req.user
- * 4. Call next() jika valid, return 401/403 jika invalid
+ * 2. Verify token dengan Supabase Auth
+ * 3. Get user role dari user_metadata atau master_pihak table
+ * 4. Inject user data ke req.user
+ * 5. Call next() jika valid, return 401 jika invalid
  * 
- * EXPECTED TOKEN PAYLOAD:
+ * SUPABASE JWT PAYLOAD:
  * {
- *   id_pihak: "uuid-mandor-agus",  // WHO (WAJIB)
- *   nama_pihak: "Agus Mandor",      // Optional
- *   role: "MANDOR",                 // Optional
- *   iat: 1234567890,                // Issued At (auto by JWT)
- *   exp: 1234567890                 // Expiration (auto by JWT)
+ *   sub: "auth-user-uuid",          // Supabase Auth User ID
+ *   email: "user@example.com",
+ *   role: "authenticated",          // Supabase role (not our business role)
+ *   user_metadata: {
+ *     role: "ASISTEN",              // Our custom role
+ *     id_pihak: "uuid",             // Link to master_pihak
+ *     nama_pihak: "Name"
+ *   }
  * }
- * 
- * ENV REQUIREMENTS:
- * - JWT_SECRET: Secret key untuk sign/verify token (wajib di .env)
- * - JWT_EXPIRES_IN: Token expiration time (default: '7d')
  */
-function authenticateJWT(req, res, next) {
-  // 1. Extract token dari Authorization header
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader) {
-    return res.status(401).json({
-      success: false,
-      error: 'Unauthorized',
-      message: 'Token tidak ditemukan. Silakan login terlebih dahulu.'
-    });
-  }
-  
-  // Format header: "Bearer <token>"
-  const parts = authHeader.split(' ');
-  
-  if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    return res.status(401).json({
-      success: false,
-      error: 'Invalid token format',
-      message: 'Format token harus: "Bearer <token>"'
-    });
-  }
-  
-  const token = parts[1];
-  
-  // 2. Verify token dengan secret key
-  const secret = process.env.JWT_SECRET || 'default-secret-key-CHANGE-THIS';
-  
-  if (secret === 'default-secret-key-CHANGE-THIS') {
-    console.warn('⚠️  WARNING: Using default JWT secret! Set JWT_SECRET in .env for production!');
-  }
-  
+async function authenticateJWT(req, res, next) {
   try {
-    // Prinsip TEPAT: Verify token signature & expiration
-    const decoded = jwt.verify(token, secret);
+    // 1. Extract token dari Authorization header
+    const authHeader = req.headers.authorization;
     
-    // 3. Validasi payload wajib (id_pihak)
-    if (!decoded.id_pihak) {
+    if (!authHeader) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized',
+        message: 'Token tidak ditemukan. Silakan login terlebih dahulu.'
+      });
+    }
+    
+    // Format header: "Bearer <token>"
+    const parts = authHeader.split(' ');
+    
+    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token format',
+        message: 'Format token harus: "Bearer <token>"'
+      });
+    }
+    
+    const token = parts[1];
+    
+    // 2. Verify token dengan Supabase Auth
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) {
+      console.warn('⚠️  [AUTH] Supabase auth failed:', error?.message || 'User not found');
+      
+      // Fallback: Try legacy JWT verification (for backward compatibility)
+      try {
+        const secret = process.env.JWT_SECRET || 'default-secret-key-CHANGE-THIS';
+        const decoded = jwt.verify(token, secret);
+        
+        if (!decoded.id_pihak) {
+          return res.status(403).json({
+            success: false,
+            error: 'Invalid token payload',
+            message: 'Token tidak valid: id_pihak tidak ditemukan'
+          });
+        }
+        
+        // Use legacy JWT
+        req.user = {
+          id_pihak: decoded.id_pihak,
+          nama_pihak: decoded.nama_pihak || null,
+          role: (decoded.role || 'VIEWER').toUpperCase(),
+          email: decoded.email || null,
+          auth_type: 'legacy_jwt'
+        };
+        
+        console.log('✅ [AUTH] Legacy JWT authenticated:', req.user.role);
+        return next();
+        
+      } catch (legacyError) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid or expired token',
+          message: 'Token tidak valid atau kadaluarsa. Silakan login ulang.'
+        });
+      }
+    }
+    
+    // 3. Get user role from user_metadata or master_pihak table
+    let role = user.user_metadata?.role;
+    let id_pihak = user.user_metadata?.id_pihak;
+    let nama_pihak = user.user_metadata?.nama_pihak;
+    
+    // If not in metadata, query master_pihak table
+    if (!role || !id_pihak) {
+      const { data: pihak, error: pihakError } = await supabase
+        .from('master_pihak')
+        .select('id_pihak, role, nama_pihak, is_active')
+        .eq('email', user.email)
+        .single();
+      
+      if (pihakError) {
+        console.warn('⚠️  [AUTH] master_pihak query failed:', pihakError.message);
+      }
+      
+      if (pihak) {
+        role = pihak.role;
+        id_pihak = pihak.id_pihak;
+        nama_pihak = pihak.nama_pihak;
+        
+        // Check if account is active
+        if (pihak.is_active === false) {
+          return res.status(403).json({
+            success: false,
+            error: 'Account inactive',
+            message: 'Akun tidak aktif. Hubungi administrator.'
+          });
+        }
+      }
+    }
+    
+    // Validate role
+    const validRoles = ['ADMIN', 'ASISTEN', 'MANDOR', 'PELAKSANA', 'VIEWER'];
+    const userRole = (role || 'VIEWER').toUpperCase();
+    
+    if (!validRoles.includes(userRole)) {
+      console.warn(`⚠️  [AUTH] Invalid role: ${userRole}`);
       return res.status(403).json({
         success: false,
-        error: 'Invalid token payload',
-        message: 'Token tidak valid: id_pihak tidak ditemukan'
+        error: 'Invalid user role',
+        message: 'Role pengguna tidak valid'
       });
     }
     
     // 4. Inject user data ke req.user
     req.user = {
-      id_pihak: decoded.id_pihak,
-      nama_pihak: decoded.nama_pihak || null,
-      role: decoded.role || null,
-      // Simpan juga raw decoded untuk debugging
-      _raw: decoded
+      auth_user_id: user.id,
+      id_pihak: id_pihak || user.id, // Fallback to auth user ID
+      nama_pihak: nama_pihak || user.email,
+      role: userRole,
+      email: user.email,
+      auth_type: 'supabase'
     };
     
-    // Log untuk audit trail (optional, disable di production untuk performa)
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('🔐 [Auth] User authenticated:', {
-        id_pihak: req.user.id_pihak,
-        role: req.user.role,
-        endpoint: req.path
-      });
-    }
+    // Log untuk audit trail
+    console.log(`✅ [AUTH] User authenticated: ${req.user.email} (${req.user.role})`);
     
     // 5. Lanjutkan ke next middleware/endpoint
     next();
     
-  } catch (err) {
-    // JWT verification failed
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        error: 'Token expired',
-        message: 'Token sudah kadaluarsa. Silakan login ulang.'
-      });
-    }
-    
-    if (err.name === 'JsonWebTokenError') {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid token',
-        message: 'Token tidak valid. Silakan login ulang.'
-      });
-    }
-    
-    // Unknown error
-    console.error('❌ [Auth] JWT verification error:', err.message);
+  } catch (error) {
+    console.error('❌ [AUTH] Authentication error:', error.message);
     return res.status(500).json({
       success: false,
       error: 'Authentication failed',
