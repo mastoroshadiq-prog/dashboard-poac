@@ -14,6 +14,7 @@
  */
 
 const { supabase } = require('../config/supabase');
+const lifecycleService = require('./lifecycleService');
 
 /**
  * FITUR M-2.1: CORONG ALUR KERJA (Funnel Chart)
@@ -968,6 +969,62 @@ async function getDashboardOperasional(filters = {}) {
   }
 }
 
+/**
+ * LIFECYCLE WIDGET (NEW - Phase 2)
+ * 
+ * Purpose: Add lifecycle overview to operational dashboard
+ * Returns: Compact summary of all 5 lifecycle phases
+ * 
+ * Output:
+ * {
+ *   total_phases: 5,
+ *   total_spks: 11,
+ *   total_executions: 22,
+ *   health_index: 76,
+ *   phases_summary: [
+ *     { nama_fase: 'Pembibitan', spks: 2, completion: 100 },
+ *     ...
+ *   ]
+ * }
+ */
+async function getLifecycleWidget() {
+  try {
+    console.log('🔍 [LIFECYCLE] Fetching lifecycle widget for operational dashboard...');
+    
+    // Get full overview from lifecycleService
+    const overview = await lifecycleService.getLifecycleOverview();
+    
+    // Compact format for widget
+    const widget = {
+      total_phases: overview.summary.total_phases,
+      total_spks: overview.summary.total_spks_all,
+      total_executions: overview.summary.total_executions_all,
+      avg_completion: overview.summary.avg_completion,
+      health_index: overview.health_index,
+      phases_summary: overview.phases.map(p => ({
+        nama_fase: p.nama_fase,
+        spks: p.total_spks,
+        executions: p.total_executions,
+        completion: p.completion_rate
+      }))
+    };
+    
+    console.log('✅ Lifecycle widget generated');
+    return widget;
+    
+  } catch (error) {
+    console.error('❌ Error in getLifecycleWidget:', error);
+    return {
+      total_phases: 0,
+      total_spks: 0,
+      total_executions: 0,
+      avg_completion: 0,
+      health_index: 0,
+      phases_summary: []
+    };
+  }
+}
+
 // Export functions
 module.exports = {
   getDashboardOperasional,
@@ -982,5 +1039,7 @@ module.exports = {
   getTasksByCategory,
   getBlockersByCategory,
   // Export PANEN metrics (NEW - Tahap 6)
-  getPanenMetrics
+  getPanenMetrics,
+  // Export LIFECYCLE metrics (NEW - Phase 2)
+  getLifecycleWidget
 };

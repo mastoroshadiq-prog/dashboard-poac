@@ -14,6 +14,7 @@
  */
 
 const { supabase } = require('../config/supabase');
+const lifecycleService = require('./lifecycleService');
 
 /**
  * FITUR M-3.1: MATRIKS KEBINGUNGAN (Confusion Matrix)
@@ -350,9 +351,81 @@ async function getDashboardTeknis(filters = {}) {
   }
 }
 
+/**
+ * PLANTATION HEALTH INDEX BY PHASE (NEW - Phase 2)
+ * 
+ * Purpose: Add lifecycle health metrics to technical dashboard
+ * Returns: Health index breakdown by lifecycle phase
+ * 
+ * Output:
+ * {
+ *   overall_health: 76,
+ *   by_phase: [
+ *     { nama_fase: 'Pembibitan', health_score: 100, status: 'EXCELLENT' },
+ *     { nama_fase: 'TBM', health_score: 100, status: 'EXCELLENT' },
+ *     ...
+ *   ],
+ *   critical_phases: ['Replanting']
+ * }
+ */
+async function getPlantationHealthIndex() {
+  try {
+    console.log('🔍 [LIFECYCLE] Fetching plantation health index by phase...');
+    
+    // Get lifecycle overview
+    const overview = await lifecycleService.getLifecycleOverview();
+    
+    // Calculate health score per phase
+    const byPhase = overview.phases.map(p => {
+      // Health score = completion rate (simple formula)
+      const healthScore = p.completion_rate;
+      
+      let status = 'CRITICAL';
+      if (healthScore >= 80) status = 'EXCELLENT';
+      else if (healthScore >= 60) status = 'GOOD';
+      else if (healthScore >= 40) status = 'FAIR';
+      else if (healthScore > 0) status = 'POOR';
+      
+      return {
+        nama_fase: p.nama_fase,
+        health_score: healthScore,
+        status: status,
+        spks: p.total_spks,
+        executions: p.total_executions
+      };
+    });
+    
+    // Identify critical phases (< 40%)
+    const criticalPhases = byPhase
+      .filter(p => p.health_score < 40)
+      .map(p => p.nama_fase);
+    
+    const result = {
+      overall_health: overview.health_index,
+      by_phase: byPhase,
+      critical_phases: criticalPhases,
+      total_phases: overview.summary.total_phases
+    };
+    
+    console.log('✅ Plantation health index generated');
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error in getPlantationHealthIndex:', error);
+    return {
+      overall_health: 0,
+      by_phase: [],
+      critical_phases: [],
+      total_phases: 0
+    };
+  }
+}
+
 // Export functions
 module.exports = {
   getDashboardTeknis,
   calculateMatriksKebingungan,
-  calculateDistribusiNdre
+  calculateDistribusiNdre,
+  // Export LIFECYCLE metrics (NEW - Phase 2)
+  getPlantationHealthIndex
 };

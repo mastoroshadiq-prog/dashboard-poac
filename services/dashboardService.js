@@ -10,6 +10,7 @@
  */
 
 const { supabase } = require('../config/supabase');
+const lifecycleService = require('./lifecycleService');
 
 /**
  * 1. KRI: Lead Time APH (Average Days from G1 Detection to APH Execution)
@@ -560,6 +561,63 @@ async function getKpiEksekutif(filters = {}) {
   }
 }
 
+/**
+ * LIFECYCLE SOP COMPLIANCE BY PHASE (NEW - Phase 2)
+ * 
+ * Purpose: Add lifecycle SOP compliance to executive dashboard
+ * Returns: SOP compliance metrics across all lifecycle phases
+ * 
+ * Output:
+ * {
+ *   overall_compliance: 50,
+ *   compliant_phases: 2,
+ *   total_phases: 5,
+ *   phases: [
+ *     { nama_fase: 'TBM', sop_count: 3, spk_count: 3, status: 'COMPLIANT' },
+ *     ...
+ *   ],
+ *   non_compliant_count: 3
+ * }
+ */
+async function getLifecycleSOPCompliance() {
+  try {
+    console.log('🔍 [LIFECYCLE] Fetching SOP compliance by phase for executive dashboard...');
+    
+    // Get SOP compliance from lifecycleService
+    const sopData = await lifecycleService.getSOPComplianceByPhase();
+    
+    // Compact format for executive view
+    const compliance = {
+      overall_compliance: sopData.overall_compliance,
+      compliant_phases: sopData.by_phase.filter(p => p.status === 'COMPLIANT').length,
+      total_phases: sopData.by_phase.length,
+      phases: sopData.by_phase.map(p => ({
+        nama_fase: p.nama_fase,
+        sop_count: p.sop_count,
+        spk_count: p.spk_count,
+        compliance_ratio: p.compliance_ratio,
+        status: p.status
+      })),
+      non_compliant_count: sopData.non_compliant_phases.length,
+      needs_attention: sopData.non_compliant_phases.map(p => p.nama_fase)
+    };
+    
+    console.log('✅ Lifecycle SOP compliance generated');
+    return compliance;
+    
+  } catch (error) {
+    console.error('❌ Error in getLifecycleSOPCompliance:', error);
+    return {
+      overall_compliance: 0,
+      compliant_phases: 0,
+      total_phases: 0,
+      phases: [],
+      non_compliant_count: 0,
+      needs_attention: []
+    };
+  }
+}
+
 module.exports = {
   getKpiEksekutif,
   // Export individual functions untuk testing
@@ -570,5 +628,7 @@ module.exports = {
   // Export enhancement functions
   calculateTrenKepatuhanSop,
   calculatePlanningAccuracy,
-  calculateSopComplianceBreakdown  // ✨ NEW export
+  calculateSopComplianceBreakdown,  // ✨ NEW export
+  // Export LIFECYCLE metrics (NEW - Phase 2)
+  getLifecycleSOPCompliance
 };

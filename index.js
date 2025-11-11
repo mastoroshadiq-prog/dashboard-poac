@@ -20,6 +20,7 @@ const { supabase, testConnection } = require('./config/supabase');
 // 3. Import routes
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const spkRoutes = require('./routes/spkRoutes');
+const lifecycleRoutes = require('./routes/lifecycleRoutes');
 
 // 4. Initialize Express app
 const app = express();
@@ -69,6 +70,7 @@ app.get('/health', async (req, res) => {
 // API v1 Routes
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/spk', spkRoutes);
+app.use('/api/v1/lifecycle', lifecycleRoutes);
 
 // 404 Handler
 app.use((req, res) => {
@@ -117,6 +119,11 @@ app.listen(PORT, async () => {
   console.log('   GET  /api/v1/dashboard/kpi-eksekutif   - KPI Eksekutif (M-1.1) 🔐');
   console.log('   GET  /api/v1/dashboard/operasional     - Dashboard Operasional (M-1.2) 🔐');
   console.log('   GET  /api/v1/dashboard/teknis          - Dashboard Teknis (M-1.3) 🔐');
+  console.log('');
+  console.log('   🌱 LIFECYCLE (READ) - Multi-Phase Metrics:');
+  console.log('   GET  /api/v1/lifecycle/overview        - All 5 Phases Summary');
+  console.log('   GET  /api/v1/lifecycle/phase/:name     - Specific Phase Metrics');
+  console.log('   GET  /api/v1/lifecycle/sop-compliance  - SOP Compliance by Phase');
   console.log('');
   console.log('   ✍️  SPK - ORGANIZING (Platform B) - 🔐 JWT Required:');
   console.log('   POST /api/v1/spk/                      - Buat SPK Header ✅ M-4.1 🔐');
