@@ -21,6 +21,9 @@ const { supabase, testConnection } = require('./config/supabase');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const spkRoutes = require('./routes/spkRoutes');
 const lifecycleRoutes = require('./routes/lifecycleRoutes');
+const droneNdreRoutes = require('./routes/droneNdreRoutes');
+const spkValidasiDroneRoutes = require('./routes/spkValidasiDroneRoutes');
+const opsSpkRoutes = require('./routes/opsSpkRoutes');
 
 // 4. Initialize Express app
 const app = express();
@@ -70,7 +73,10 @@ app.get('/health', async (req, res) => {
 // API v1 Routes
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/spk', spkRoutes);
+app.use('/api/v1/spk', spkValidasiDroneRoutes); // SPK Validasi Drone routes
 app.use('/api/v1/lifecycle', lifecycleRoutes);
+app.use('/api/v1/drone', droneNdreRoutes);
+app.use('/api/v1/ops', opsSpkRoutes); // OPS Multi-Purpose SPK routes
 
 // 404 Handler
 app.use((req, res) => {
