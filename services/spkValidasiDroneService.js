@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SPK VALIDASI DRONE SERVICE
  * 
  * Service untuk membuat SPK penugasan validasi pohon
@@ -38,7 +38,7 @@ async function createSPKValidasiDrone(params) {
     } = params;
 
     // DEBUG: Log parameters
-    console.log('🔍 createSPKValidasiDrone called with params:', {
+    console.log(' createSPKValidasiDrone called with params:', {
       created_by,
       assigned_to,
       trees_count: trees.length,
@@ -52,7 +52,7 @@ async function createSPKValidasiDrone(params) {
       throw new Error('Missing required fields: created_by, assigned_to, trees');
     }
 
-    console.log('🔍 Creating SPK for trees:', trees);
+    console.log(' Creating SPK for trees:', trees);
 
     // Get tree details from database
     const { data: treeData, error: treeError } = await supabase
@@ -70,7 +70,7 @@ async function createSPKValidasiDrone(params) {
       .in('id_npokok', trees)
       .eq('kebun_observasi.jenis_survey', 'DRONE_NDRE');
 
-    console.log('🔍 Query result:', { count: treeData?.length, error: treeError });
+    console.log(' Query result:', { count: treeData?.length, error: treeError });
 
     if (treeError) throw treeError;
 
@@ -106,6 +106,26 @@ async function createSPKValidasiDrone(params) {
       finalPriority = 'HIGH';
     }
 
+    // ================================================================
+    // SOP INTEGRATION: Fetch active SOP for VALIDASI_DRONE_NDRE
+    // ================================================================
+    const { data: sopData, error: sopError } = await supabase
+      .from('sop_master')
+      .select('*')
+      .eq('jenis_kegiatan', 'VALIDASI_DRONE_NDRE')
+      .eq('is_active', true)
+      .eq('status', 'ACTIVE')
+      .single();
+
+    if (sopError) {
+      console.warn('  No active SOP found for VALIDASI_DRONE_NDRE:', sopError.message);
+    } else {
+      console.log(' Using SOP:', sopData.sop_code, sopData.sop_version);
+      console.log('   - Checklist Items:', sopData.checklist_items?.length || 0);
+      console.log('   - Mandatory Photos:', sopData.mandatory_photos);
+      console.log('   - Est. Time:', sopData.estimated_time_mins, 'mins');
+    }
+
     // Create SPK Header (using spk_header table)
     const spkNo = `SPK-DRONE-${Date.now()}`;
     const spkData = {
@@ -117,9 +137,12 @@ async function createSPKValidasiDrone(params) {
       keterangan: notes || `Validasi ${enrichedTreeData.length} pohon berdasarkan survey drone NDRE. Stres Berat: ${stressBerat}, Stres Sedang: ${stresSedang}. Assigned to: ${assigned_to}`,
       risk_level: finalPriority, // URGENT, HIGH, NORMAL
       week_number: getWeekNumber(new Date()),
+      // SOP Integration
+      id_sop: sopData?.id_sop || null,
+      sop_version_used: sopData?.sop_version || null,
     };
 
-    console.log('🔍 Inserting SPK with data:', JSON.stringify(spkData, null, 2));
+    console.log(' Inserting SPK with data:', JSON.stringify(spkData, null, 2));
 
     const { data: spk, error: spkError } = await supabase
       .from('spk_header')
@@ -128,11 +151,11 @@ async function createSPKValidasiDrone(params) {
       .single();
 
     if (spkError) {
-      console.error('❌ SPK Insert Error:', JSON.stringify(spkError, null, 2));
+      console.error(' SPK Insert Error:', JSON.stringify(spkError, null, 2));
       throw spkError;
     }
 
-    console.log('✅ SPK Created:', spk.id_spk);
+    console.log(' SPK Created:', spk.id_spk);
 
     // Create tugas for each tree (using spk_tugas table)
     const tasks = enrichedTreeData.map(tree => {
@@ -165,7 +188,8 @@ async function createSPKValidasiDrone(params) {
             ndre_value: obs?.ndre_value,
             ndre_classification: obs?.ndre_classification,
           },
-          validation_checklist: [
+          // SOP Integration: Use dynamic checklist from SOP
+          validation_checklist: sopData?.checklist_items || [
             'Cek visual kondisi daun (warna, ukuran)',
             'Cek kondisi batang (kesehatan, penyakit)',
             'Cek kondisi tanah sekitar (kelembaban, nutrisi)',
@@ -173,6 +197,15 @@ async function createSPKValidasiDrone(params) {
             'Verifikasi apakah stress sesuai hasil drone',
             'Catat penyebab stress jika ditemukan',
           ],
+          // SOP Integration: Add SOP reference
+          sop_reference: sopData ? {
+            id_sop: sopData.id_sop,
+            sop_code: sopData.sop_code,
+            sop_version: sopData.sop_version,
+            sop_name: sopData.sop_name,
+            mandatory_photos: sopData.mandatory_photos,
+            estimated_time_mins: sopData.estimated_time_mins,
+          } : null,
         },
         prioritas: obs?.ndre_classification === 'Stres Berat' ? 1 : 
                    obs?.ndre_classification === 'Stres Sedang' ? 2 : 3,
@@ -184,7 +217,7 @@ async function createSPKValidasiDrone(params) {
       };
     });
 
-    console.log('🔍 Inserting', tasks.length, 'tugas...');
+    console.log(' Inserting', tasks.length, 'tugas...');
     console.log('Sample task:', JSON.stringify(tasks[0], null, 2));
 
     const { data: tugasData, error: tugasError } = await supabase
@@ -193,11 +226,11 @@ async function createSPKValidasiDrone(params) {
       .select();
 
     if (tugasError) {
-      console.error('❌ Tugas Insert Error:', JSON.stringify(tugasError, null, 2));
+      console.error(' Tugas Insert Error:', JSON.stringify(tugasError, null, 2));
       throw tugasError;
     }
 
-    console.log('✅ Tugas Created:', tugasData.length);
+    console.log(' Tugas Created:', tugasData.length);
 
     // Log activity
     await logSPKActivity({
@@ -206,6 +239,38 @@ async function createSPKValidasiDrone(params) {
       action: 'CREATE_SPK_VALIDASI_DRONE',
       notes: `Created SPK ${spk.nama_spk} with ${tugasData.length} validation tasks. Priority: ${finalPriority}`,
     });
+
+    // Helper: Group tasks by location (blok) with detail baris and pokok
+    function getLocationBreakdown(tugasData) {
+      const locationMap = {};
+      
+      tugasData.forEach(tugas => {
+        const loc = tugas.target_json?.tree_location;
+        if (!loc) return;
+        
+        const blokKey = `${loc.divisi}_${loc.blok}_${loc.blok_detail}`;
+        
+        if (!locationMap[blokKey]) {
+          locationMap[blokKey] = {
+            divisi: loc.divisi,
+            blok: loc.blok,
+            blok_detail: loc.blok_detail,
+            trees: [],
+          };
+        }
+        
+        locationMap[blokKey].trees.push({
+          n_baris: loc.n_baris,
+          n_pokok: loc.n_pokok,
+          id_tugas: tugas.id_tugas,
+        });
+      });
+      
+      return Object.values(locationMap).map(loc => ({
+        ...loc,
+        tree_count: loc.trees.length,
+      }));
+    }
 
     return {
       spk: {
@@ -220,8 +285,19 @@ async function createSPKValidasiDrone(params) {
         target_selesai: spk.tanggal_target_selesai,
         catatan: spk.keterangan,
         created_at: spk.tanggal_dibuat,
+        // SOP Integration: Expose SOP reference in response
+        sop_reference: sopData ? {
+          id_sop: sopData.id_sop,
+          sop_code: sopData.sop_code,
+          sop_version: sopData.sop_version,
+          sop_name: sopData.sop_name,
+        } : null,
       },
-      tugas: tugasData,
+      // Enhancement: Expose tree_location at tugas level
+      tugas: tugasData.map(t => ({
+        ...t,
+        tree_location: t.target_json?.tree_location || null,
+      })),
       summary: {
         total_trees: tugasData.length,
         stress_levels: {
@@ -231,6 +307,8 @@ async function createSPKValidasiDrone(params) {
         },
         priority: finalPriority,
         deadline: spk.tanggal_target_selesai,
+        // Enhancement: Add location breakdown
+        locations: getLocationBreakdown(tugasData),
       },
     };
 
@@ -535,7 +613,7 @@ function getWeekNumber(date) {
 async function logSPKActivity(params) {
   try {
     // Temporarily disabled - table doesn't exist yet
-    console.log('📝 Activity Log:', params);
+    console.log(' Activity Log:', params);
     
     /* 
     const { id_spk, user_id, action, notes } = params;
