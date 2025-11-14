@@ -562,6 +562,9 @@ router.get('/daftar-tugas', async (req, res) => {
 });
 
 // ============================================================
+// NOTE: /kanban route has been MOVED to spkValidasiDroneRoutes.js
+// to fix route conflict with /:spk_id
+// ============================================================
 // SUB-PROSES 2: ACTUATING & REPORTING (Platform A - Flutter)
 // ============================================================
 

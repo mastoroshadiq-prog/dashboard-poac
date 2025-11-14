@@ -364,6 +364,83 @@ router.get('/teknis',
 });
 
 /**
+ * GET /api/v1/dashboard/ndre-statistics
+ * 
+ * 🆕 NDRE Statistics Dashboard
+ * ⚠️  NO AUTH: For development/testing only
+ * 
+ * TUJUAN: Get NDRE statistics for dashboard (tree health distribution)
+ * 
+ * QUERY PARAMETERS (Optional):
+ * - divisi: Filter by divisi
+ * - afdeling: Filter by afdeling
+ * - blok: Filter by blok
+ * 
+ * RESPONSE STRUCTURE:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "total_trees": 910,
+ *     "distribution": {
+ *       "stres_berat": 141,
+ *       "stres_sedang": 763,
+ *       "sehat": 6
+ *     },
+ *     "percentage": {
+ *       "stres_berat": 15.49,
+ *       "stres_sedang": 83.85,
+ *       "sehat": 0.66
+ *     }
+ *   },
+ *   "message": "NDRE statistics berhasil diambil"
+ * }
+ * 
+ * CONTOH REQUEST:
+ * GET /api/v1/dashboard/ndre-statistics
+ * (No Authorization header needed for now)
+ */
+router.get('/ndre-statistics', 
+  // ⚠️  TEMPORARY: No auth middleware for frontend integration testing
+  // authenticateJWT, 
+  // authorizeRole(['ASISTEN', 'ADMIN']), 
+  async (req, res) => {
+  try {
+    console.log('📊 [Dashboard] GET NDRE Statistics (NO AUTH)');
+    console.log('   Query params:', req.query);
+    
+    // TODO: Query kebun_observasi untuk distribution
+    // For now, return stub data
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        total_trees: 910,
+        distribution: {
+          stres_berat: 141,
+          stres_sedang: 763,
+          sehat: 6
+        },
+        percentage: {
+          stres_berat: 15.49,
+          stres_sedang: 83.85,
+          sehat: 0.66
+        }
+      },
+      message: "NDRE statistics berhasil diambil (STUB - NO AUTH)"
+    });
+    
+  } catch (error) {
+    console.error('❌ [API Error] GET /api/v1/dashboard/ndre-statistics:', error.message);
+    
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Gagal mengambil NDRE statistics'
+    });
+  }
+});
+
+/**
  * GET /api/v1/dashboard/panen
  * 
  * 🆕 PHASE 1: PANEN Tracking (Tahap 6 Model - NEW Schema)

@@ -17,6 +17,56 @@ const router = express.Router();
 const spkValidasiDroneService = require('../services/spkValidasiDroneService');
 
 // ============================================================
+// ⚠️ CRITICAL: KANBAN ROUTE MUST BE FIRST!
+// ============================================================
+/**
+ * GET /api/v1/spk/kanban
+ * 
+ * CRITICAL: This route MUST be defined BEFORE all other routes
+ * to prevent /:spk_id from catching "kanban" as UUID parameter!
+ * 
+ * Response 200:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "PENDING": [...],
+ *     "DIKERJAKAN": [...],
+ *     "SELESAI": [...]
+ *   }
+ * }
+ */
+router.get('/kanban', async (req, res) => {
+  try {
+    console.log('✅✅✅ [SUCCESS] Route /kanban HIT FIRST!');
+    console.log('📋 [Kanban] GET SPK Kanban');
+    
+    const filters = {
+      divisi: req.query.divisi || null,
+      afdeling: req.query.afdeling || null,
+      mandor_id: req.query.mandor_id || null
+    };
+    
+    // Import spkService for kanban function
+    const spkService = require('../services/spkService');
+    const result = await spkService.getSPKKanban(filters);
+    
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: 'Data SPK Kanban berhasil diambil'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error getting SPK kanban:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Gagal mengambil data SPK Kanban'
+    });
+  }
+});
+
+// ============================================================
 // ENDPOINT 1: CREATE SPK VALIDASI DRONE (Asisten Manager)
 // ============================================================
 /**
@@ -290,10 +340,16 @@ router.post('/:spk_id/assign-surveyor', async (req, res) => {
 });
 
 // ============================================================
-// ENDPOINT 4: GET SPK DETAIL
+// NOTE: /kanban route has been MOVED to TOP of file (line ~38)
+// to ensure it's registered BEFORE /:spk_id catch-all route
+// ============================================================
+// ENDPOINT 5: GET SPK DETAIL
 // ============================================================
 /**
  * GET /api/v1/spk/:spk_id
+ * 
+ * NOTE: This is a catch-all route, so specific routes (like /kanban) 
+ * MUST be defined BEFORE this one!
  * 
  * Response 200:
  * {
@@ -323,11 +379,23 @@ router.post('/:spk_id/assign-surveyor', async (req, res) => {
 router.get('/:spk_id', async (req, res) => {
   try {
     const { spk_id } = req.params;
+    
+    console.log('🔴🔴🔴 [DEBUG] Route /:spk_id HIT! spk_id =', spk_id);
 
     if (!spk_id) {
       return res.status(400).json({
         success: false,
         message: 'spk_id wajib diisi'
+      });
+    }
+
+    // Validate UUID format to prevent "kanban" being treated as UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(spk_id)) {
+      console.log('🔴 [DEBUG] Invalid UUID format detected:', spk_id);
+      return res.status(400).json({
+        success: false,
+        message: `Invalid spk_id format: "${spk_id}" is not a valid UUID. Did you mean to use a different endpoint?`
       });
     }
 
