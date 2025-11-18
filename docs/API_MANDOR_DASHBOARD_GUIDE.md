@@ -15,6 +15,26 @@ Dashboard Mandor menyediakan 4 endpoint utama untuk monitoring dan manajemen tug
 
 ---
 
+## 📋 SPK MANAGEMENT ENDPOINTS
+
+**PENTING:** Selain 4 endpoint dashboard di bawah, Mandor juga memiliki akses ke **SPK Management endpoints** untuk mengelola SPK secara komprehensif:
+
+### 🔍 SPK List & Filtering
+- `GET /api/v1/spk/mandor/:mandor_id` - List SPK assigned to mandor with filters
+- Support filtering by: status, priority, date range, pagination
+
+### 📖 SPK Detail & Task Management  
+- `GET /api/v1/spk/:spk_id` - Full SPK detail with task breakdown
+- View all tasks, assignments, progress per SPK
+
+### 👥 Task Assignment to Surveyor
+- `POST /api/v1/spk/:spk_id/assign-surveyor` - Assign specific tasks to surveyor
+- Bulk assignment, status tracking, assignment validation
+
+**📚 Dokumentasi lengkap:** Lihat `docs/API_SPK_VALIDASI_DRONE_GUIDE.md` untuk detail implementasi SPK Management.
+
+---
+
 ## 🎯 ENDPOINT 1: DASHBOARD OVERVIEW
 
 **Fungsi:** Menampilkan ringkasan statistik dashboard mandor dengan informasi SPK, tugas, dan target harian.
@@ -507,6 +527,370 @@ curl -X GET "http://localhost:3000/api/v1/mandor/a0eebc99-9c0b-4ef8-bb6d-6bb9bd3
 
 ---
 
+## 📋 SPK MANAGEMENT API REFERENCE
+
+> **Catatan:** Dokumentasi lengkap SPK Management ada di `docs/API_SPK_VALIDASI_DRONE_GUIDE.md`. Berikut ringkasan untuk implementasi frontend.
+
+### 🔍 ENDPOINT: GET SPK LIST FOR MANDOR
+
+```http
+GET /api/v1/spk/mandor/:mandor_id
+```
+
+**Query Parameters:**
+- `status` - Filter by SPK status (`PENDING`, `DIKERJAKAN`, `COMPLETED`)
+- `priority` - Filter by priority (`NORMAL`, `HIGH`, `URGENT`)
+- `date_from` - Filter from date (`YYYY-MM-DD`)
+- `date_to` - Filter to date (`YYYY-MM-DD`)
+- `page` - Page number (default: 1)
+- `limit` - Items per page (default: 20, max: 100)
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id_spk": "uuid-spk-1",
+      "no_spk": "SPK-DRONE-1731380000000",
+      "nama_spk": "Validasi Drone Area D001A",
+      "jenis_kegiatan": "VALIDASI_DRONE_NDRE",
+      "status": "PENDING",
+      "prioritas": "URGENT",
+      "catatan": "Validasi 15 pohon berdasarkan survey drone NDRE",
+      "created_at": "2025-01-25T10:00:00Z",
+      "target_selesai": "2025-01-27",
+      "completion_percentage": 60.5,
+      "task_statistics": {
+        "total": 15,
+        "pending": 5,
+        "assigned": 3,
+        "in_progress": 2,
+        "completed": 5,
+        "urgent": 8
+      }
+    }
+  ],
+  "pagination": {
+    "current_page": 1,
+    "per_page": 20,
+    "total_pages": 3,
+    "total_items": 45
+  }
+}
+```
+
+**Frontend Implementation:**
+```javascript
+// SPK List with filters
+const fetchSPKList = async (mandorId, filters = {}) => {
+  const params = new URLSearchParams({
+    status: filters.status || '',
+    priority: filters.priority || '',
+    date_from: filters.dateFrom || '',
+    date_to: filters.dateTo || '',
+    page: filters.page || 1,
+    limit: filters.limit || 20
+  });
+  
+  const response = await fetch(
+    `http://localhost:3000/api/v1/spk/mandor/${mandorId}?${params}`
+  );
+  return response.json();
+};
+
+// Usage in component
+const [spkList, setSpkList] = useState([]);
+const [filters, setFilters] = useState({ status: 'PENDING', priority: 'URGENT' });
+
+useEffect(() => {
+  fetchSPKList(mandorId, filters).then(data => {
+    if (data.success) {
+      setSpkList(data.data);
+    }
+  });
+}, [mandorId, filters]);
+```
+
+### 📖 ENDPOINT: GET SPK DETAIL
+
+```http
+GET /api/v1/spk/:spk_id
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "spk": {
+      "id_spk": "uuid-spk-1",
+      "nama_spk": "Validasi Drone Area D001A",
+      "status": "DIKERJAKAN",
+      "keterangan": "Validasi area dengan stress level tinggi",
+      "tanggal_dibuat": "2025-01-25T08:00:00Z",
+      "tanggal_target_selesai": "2025-01-27T17:00:00Z"
+    },
+    "tugas": [
+      {
+        "id_tugas": "uuid-tugas-1",
+        "status_tugas": "ASSIGNED",
+        "prioritas": 1,
+        "target_json": {
+          "tree_id": "P-D001A-01-01",
+          "id_npokok": "uuid-tree-1",
+          "coordinates": [106.123, -6.456]
+        },
+        "pic_name": "Assigned to John Doe",
+        "tanggal_dibuat": "2025-01-25T08:30:00Z"
+      }
+    ],
+    "completion_percentage": 73.33,
+    "summary": {
+      "total_tugas": 15,
+      "pending": 2,
+      "assigned": 4,
+      "in_progress": 3,
+      "completed": 6
+    }
+  }
+}
+```
+
+**Frontend Implementation:**
+```javascript
+// SPK Detail with task breakdown
+const fetchSPKDetail = async (spkId) => {
+  const response = await fetch(`http://localhost:3000/api/v1/spk/${spkId}`);
+  return response.json();
+};
+
+// Task status colors
+const getTaskStatusColor = (status) => {
+  const colors = {
+    PENDING: '#F59E0B',      // Orange
+    ASSIGNED: '#3B82F6',     // Blue  
+    IN_PROGRESS: '#10B981',  // Green
+    COMPLETED: '#6B7280'     // Gray
+  };
+  return colors[status] || '#6B7280';
+};
+
+// Task priority indicators
+const getPriorityIcon = (priority) => {
+  return priority === 1 ? '🔥' : priority === 2 ? '⚡' : '📝';
+};
+```
+
+### 👥 ENDPOINT: ASSIGN TASKS TO SURVEYOR
+
+```http
+POST /api/v1/spk/:spk_id/assign-surveyor
+```
+
+**Request Body:**
+```json
+{
+  "id_tugas_list": [
+    "uuid-tugas-1",
+    "uuid-tugas-2",
+    "uuid-tugas-3"
+  ],
+  "surveyor_id": "uuid-surveyor-123",
+  "mandor_id": "uuid-mandor-456",
+  "notes": "Prioritaskan area D001A terlebih dahulu"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "3 tugas berhasil ditugaskan ke surveyor",
+  "data": {
+    "assigned_count": 3,
+    "failed_count": 0,
+    "tugas_list": [
+      {
+        "id_tugas": "uuid-tugas-1",
+        "id_npokok": "uuid-tree-1",
+        "tree_id": "P-D001A-01-01",
+        "status": "ASSIGNED",
+        "assigned_to": "uuid-surveyor-123",
+        "assigned_at": "2025-01-25T11:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+**Frontend Implementation:**
+```javascript
+// Task assignment with validation
+const assignTasksToSurveyor = async (spkId, taskIds, surveyorId, mandorId, notes) => {
+  // Validation
+  if (!taskIds || taskIds.length === 0) {
+    throw new Error('Please select at least one task');
+  }
+  if (!surveyorId) {
+    throw new Error('Please select a surveyor');
+  }
+  
+  const response = await fetch(
+    `http://localhost:3000/api/v1/spk/${spkId}/assign-surveyor`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        id_tugas_list: taskIds,
+        surveyor_id: surveyorId,
+        mandor_id: mandorId,
+        notes: notes || ''
+      })
+    }
+  );
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    throw new Error(data.message || 'Assignment failed');
+  }
+  
+  return data;
+};
+
+// Usage with error handling
+const handleTaskAssignment = async () => {
+  try {
+    setLoading(true);
+    
+    const result = await assignTasksToSurveyor(
+      selectedSPK.spk.id_spk,
+      selectedTasks,
+      selectedSurveyor,
+      mandorId,
+      assignmentNotes
+    );
+    
+    if (result.success) {
+      // Show success message
+      showNotification(
+        `${result.data.assigned_count} tasks assigned successfully!`,
+        'success'
+      );
+      
+      // Refresh data
+      await Promise.all([
+        refreshSPKDetail(),
+        refreshSPKList(),
+        refreshDashboard()
+      ]);
+      
+      // Clear form
+      setSelectedTasks([]);
+      setAssignmentNotes('');
+    }
+  } catch (error) {
+    showNotification(error.message, 'error');
+  } finally {
+    setLoading(false);
+  }
+};
+```
+
+### 🎯 SPK Management UI Flow
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  MANDOR SPK MANAGEMENT DASHBOARD                        │
+├─────────────────────────────────────────────────────────┤
+│  [Filter: Status ▼] [Priority ▼] [Date Range]           │
+├─────────────────────────────────────────────────────────┤
+│  SPK LIST (Left Panel)          │  SPK DETAIL (Right)   │
+│  ┌─────────────────────────────┐ │ ┌─────────────────────┐ │
+│  │ □ SPK-001 | URGENT | 60%   │ │ │ SPK-001 Detail      │ │
+│  │   15 tasks (5 pending)     │ │ │ Status: DIKERJAKAN  │ │
+│  │ □ SPK-002 | HIGH   | 80%   │ │ │ Progress: 60%       │ │
+│  │   8 tasks (2 pending)      │ │ │                     │ │
+│  │ ✓ SPK-003 | NORMAL | 100%  │ │ │ TASK LIST:          │ │
+│  │   12 tasks (completed)     │ │ │ ☐ Tree-001 PENDING  │ │
+│  └─────────────────────────────┘ │ │ ☐ Tree-002 PENDING  │ │
+│                                 │ │ ✓ Tree-003 ASSIGNED │ │
+│                                 │ │ ◷ Tree-004 PROGRESS │ │
+│                                 │ │                     │ │
+│                                 │ │ [Assign Selected]   │ │
+│                                 │ │ Surveyor: [John ▼]  │ │
+│                                 │ │ Notes: [_________]   │ │
+│                                 │ └─────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 🔄 State Management Recommendations
+
+```javascript
+// Complete state management for SPK Management
+const useMandorSPKManagement = (mandorId) => {
+  const [state, setState] = useState({
+    // Dashboard data
+    dashboard: null,
+    
+    // SPK Management
+    spkList: [],
+    selectedSPK: null,
+    spkFilters: {
+      status: '',
+      priority: '',
+      dateFrom: '',
+      dateTo: '',
+      page: 1,
+      limit: 20
+    },
+    
+    // Task Assignment
+    selectedTasks: [],
+    assignmentData: {
+      surveyorId: '',
+      notes: ''
+    },
+    
+    // UI State
+    loading: {
+      dashboard: false,
+      spkList: false,
+      spkDetail: false,
+      assignment: false
+    },
+    errors: {}
+  });
+  
+  // Actions
+  const actions = {
+    // Fetch data
+    fetchDashboard: () => { /* implementation */ },
+    fetchSPKList: (filters) => { /* implementation */ },
+    fetchSPKDetail: (spkId) => { /* implementation */ },
+    
+    // SPK Management
+    filterSPK: (filters) => { /* implementation */ },
+    selectSPK: (spkId) => { /* implementation */ },
+    
+    // Task Assignment
+    selectTasks: (taskIds) => { /* implementation */ },
+    assignTasks: () => { /* implementation */ },
+    
+    // UI actions
+    clearErrors: () => { /* implementation */ },
+    resetForm: () => { /* implementation */ }
+  };
+  
+  return { state, actions };
+};
+```
+
+---
+
 ## 🔧 ERROR HANDLING
 
 Semua endpoint menggunakan format error standar:
@@ -573,49 +957,305 @@ async function fetchMandorDashboard(mandorId) {
 
 ## 🚀 INTEGRATION EXAMPLES
 
-### React + Axios Example
+### Complete Mandor Dashboard with SPK Management
 
 ```javascript
 import axios from 'axios';
 import { useEffect, useState } from 'react';
 
-const API_BASE = 'http://localhost:3000/api/v1/mandor';
+const API_BASE = 'http://localhost:3000/api/v1';
 
-function MandorDashboard({ mandorId }) {
+function CompleteMandorDashboard({ mandorId }) {
   const [dashboard, setDashboard] = useState(null);
+  const [spkList, setSpkList] = useState([]);
+  const [selectedSPK, setSelectedSPK] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        setLoading(true);
-        const { data } = await axios.get(`${API_BASE}/${mandorId}/dashboard`);
-        
-        if (data.success) {
-          setDashboard(data.data);
-        } else {
-          throw new Error(data.error);
-        }
-      } catch (err) {
-        setError(err.message);
-        console.error('Dashboard fetch error:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  // Fetch dashboard overview
+  const fetchDashboard = async () => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/mandor/${mandorId}/dashboard`);
+      if (data.success) setDashboard(data.data);
+    } catch (err) {
+      console.error('Dashboard fetch error:', err);
+    }
+  };
 
-    fetchDashboard();
+  // Fetch SPK list with filters
+  const fetchSPKList = async (filters = {}) => {
+    try {
+      const params = new URLSearchParams(filters);
+      const { data } = await axios.get(`${API_BASE}/spk/mandor/${mandorId}?${params}`);
+      if (data.success) setSpkList(data.data);
+    } catch (err) {
+      console.error('SPK list fetch error:', err);
+    }
+  };
+
+  // Fetch SPK detail
+  const fetchSPKDetail = async (spkId) => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/spk/${spkId}`);
+      if (data.success) setSelectedSPK(data.data);
+    } catch (err) {
+      console.error('SPK detail fetch error:', err);
+    }
+  };
+
+  // Assign tasks to surveyor
+  const assignTasks = async (spkId, taskIds, surveyorId, notes) => {
+    try {
+      const { data } = await axios.post(`${API_BASE}/spk/${spkId}/assign-surveyor`, {
+        id_tugas_list: taskIds,
+        surveyor_id: surveyorId,
+        mandor_id: mandorId,
+        notes: notes
+      });
+      
+      if (data.success) {
+        alert(`${data.data.assigned_count} tasks assigned successfully!`);
+        // Refresh data
+        fetchSPKDetail(spkId);
+        fetchSPKList();
+        fetchDashboard();
+      }
+    } catch (err) {
+      console.error('Task assignment error:', err);
+      alert('Failed to assign tasks');
+    }
+  };
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([
+        fetchDashboard(),
+        fetchSPKList({ status: 'PENDING', limit: 10 })
+      ]);
+      setLoading(false);
+    };
+    
+    loadData();
   }, [mandorId]);
 
   if (loading) return <Spinner />;
   if (error) return <ErrorAlert message={error} />;
-  if (!dashboard) return null;
 
   return (
     <div className="mandor-dashboard">
-      <SummaryCards data={dashboard.summary} />
-      <TargetsProgress data={dashboard.today_targets} />
+      {/* Dashboard Overview */}
+      <section className="dashboard-overview">
+        <h2>Dashboard Overview</h2>
+        <SummaryCards data={dashboard?.summary} />
+        <TargetsProgress data={dashboard?.today_targets} />
+      </section>
+
+      {/* SPK Management */}
+      <section className="spk-management">
+        <h2>SPK Management</h2>
+        
+        {/* SPK Filters */}
+        <SPKFilters onFilter={fetchSPKList} />
+        
+        {/* SPK List */}
+        <SPKList 
+          spks={spkList} 
+          onSelectSPK={fetchSPKDetail}
+          selectedSPK={selectedSPK}
+        />
+        
+        {/* SPK Detail & Task Assignment */}
+        {selectedSPK && (
+          <SPKDetail 
+            spk={selectedSPK}
+            onAssignTasks={assignTasks}
+            mandorId={mandorId}
+          />
+        )}
+      </section>
+
+      {/* Real-time Monitoring */}
+      <section className="realtime-monitoring">
+        <h2>Real-time Activity</h2>
+        <RealtimeTasks mandorId={mandorId} />
+      </section>
+    </div>
+  );
+}
+
+// SPK Management Components
+function SPKFilters({ onFilter }) {
+  const [filters, setFilters] = useState({
+    status: '',
+    priority: '',
+    date_from: '',
+    date_to: ''
+  });
+
+  const handleFilterChange = (key, value) => {
+    const newFilters = { ...filters, [key]: value };
+    setFilters(newFilters);
+    onFilter(newFilters);
+  };
+
+  return (
+    <div className="spk-filters">
+      <select 
+        value={filters.status} 
+        onChange={(e) => handleFilterChange('status', e.target.value)}
+      >
+        <option value="">All Status</option>
+        <option value="PENDING">Pending</option>
+        <option value="DIKERJAKAN">In Progress</option>
+        <option value="COMPLETED">Completed</option>
+      </select>
+      
+      <select 
+        value={filters.priority} 
+        onChange={(e) => handleFilterChange('priority', e.target.value)}
+      >
+        <option value="">All Priority</option>
+        <option value="URGENT">Urgent</option>
+        <option value="HIGH">High</option>
+        <option value="NORMAL">Normal</option>
+      </select>
+      
+      <input 
+        type="date" 
+        value={filters.date_from}
+        onChange={(e) => handleFilterChange('date_from', e.target.value)}
+        placeholder="From Date"
+      />
+      
+      <input 
+        type="date" 
+        value={filters.date_to}
+        onChange={(e) => handleFilterChange('date_to', e.target.value)}
+        placeholder="To Date"
+      />
+    </div>
+  );
+}
+
+function SPKList({ spks, onSelectSPK, selectedSPK }) {
+  return (
+    <div className="spk-list">
+      {spks.map(spk => (
+        <div 
+          key={spk.id_spk}
+          className={`spk-card ${
+            selectedSPK?.spk?.id_spk === spk.id_spk ? 'selected' : ''
+          }`}
+          onClick={() => onSelectSPK(spk.id_spk)}
+        >
+          <h3>{spk.nama_spk}</h3>
+          <div className="spk-meta">
+            <Badge status={spk.status}>{spk.status}</Badge>
+            <Badge priority={spk.prioritas}>{spk.prioritas}</Badge>
+          </div>
+          <div className="task-stats">
+            <span>Total: {spk.task_statistics.total}</span>
+            <span>Pending: {spk.task_statistics.pending}</span>
+            <span>Progress: {spk.completion_percentage}%</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SPKDetail({ spk, onAssignTasks, mandorId }) {
+  const [selectedTasks, setSelectedTasks] = useState([]);
+  const [selectedSurveyor, setSelectedSurveyor] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const handleTaskSelection = (taskId, checked) => {
+    if (checked) {
+      setSelectedTasks([...selectedTasks, taskId]);
+    } else {
+      setSelectedTasks(selectedTasks.filter(id => id !== taskId));
+    }
+  };
+
+  const handleAssignment = () => {
+    if (selectedTasks.length === 0) {
+      alert('Please select at least one task');
+      return;
+    }
+    if (!selectedSurveyor) {
+      alert('Please select a surveyor');
+      return;
+    }
+    
+    onAssignTasks(
+      spk.spk.id_spk, 
+      selectedTasks, 
+      selectedSurveyor, 
+      notes
+    );
+    
+    // Reset form
+    setSelectedTasks([]);
+    setSelectedSurveyor('');
+    setNotes('');
+  };
+
+  return (
+    <div className="spk-detail">
+      <h3>SPK Detail: {spk.spk.nama_spk}</h3>
+      
+      {/* SPK Info */}
+      <div className="spk-info">
+        <p>Status: <Badge>{spk.spk.status}</Badge></p>
+        <p>Priority: <Badge>{spk.spk.risk_level}</Badge></p>
+        <p>Progress: {spk.completion_percentage}%</p>
+      </div>
+
+      {/* Task List */}
+      <div className="task-list">
+        <h4>Tasks ({spk.tugas.length})</h4>
+        {spk.tugas.map(task => (
+          <div key={task.id_tugas} className="task-item">
+            <input 
+              type="checkbox"
+              checked={selectedTasks.includes(task.id_tugas)}
+              onChange={(e) => handleTaskSelection(task.id_tugas, e.target.checked)}
+              disabled={task.status_tugas !== 'PENDING'}
+            />
+            <span className="tree-id">{task.target_json?.tree_id}</span>
+            <Badge status={task.status_tugas}>{task.status_tugas}</Badge>
+            {task.status_tugas === 'ASSIGNED' && (
+              <span className="assigned-to">→ {task.pic_name}</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Assignment Form */}
+      {selectedTasks.length > 0 && (
+        <div className="assignment-form">
+          <h4>Assign {selectedTasks.length} task(s) to Surveyor</h4>
+          
+          <select 
+            value={selectedSurveyor}
+            onChange={(e) => setSelectedSurveyor(e.target.value)}
+          >
+            <option value="">Select Surveyor</option>
+            <option value="surveyor-1">John Doe</option>
+            <option value="surveyor-2">Jane Smith</option>
+            <option value="surveyor-3">Bob Wilson</option>
+          </select>
+          
+          <textarea 
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Assignment notes (optional)"
+          />
+          
+          <button onClick={handleAssignment}>Assign Tasks</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -819,8 +1459,9 @@ node test-mandor.js
 
 ### Manual Testing with cURL
 
+**Dashboard Endpoints:**
 ```bash
-# Test Dashboard
+# Test Dashboard Overview
 curl -X GET "http://localhost:3000/api/v1/mandor/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12/dashboard"
 
 # Test Surveyors
@@ -836,74 +1477,216 @@ curl -X GET "http://localhost:3000/api/v1/mandor/a0eebc99-9c0b-4ef8-bb6d-6bb9bd3
 curl -X GET "http://localhost:3000/api/v1/mandor/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12/performance/daily?date=2025-11-13"
 ```
 
-### Postman Collection
+**SPK Management Endpoints:**
+```bash
+# Test SPK List (all)
+curl -X GET "http://localhost:3000/api/v1/spk/mandor/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12"
 
-Import collection ini ke Postman:
+# Test SPK List with filters
+curl -X GET "http://localhost:3000/api/v1/spk/mandor/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12?status=PENDING&priority=URGENT&limit=5"
+
+# Test SPK Detail
+curl -X GET "http://localhost:3000/api/v1/spk/your-spk-id-here"
+
+# Test Task Assignment
+curl -X POST "http://localhost:3000/api/v1/spk/your-spk-id-here/assign-surveyor" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_tugas_list": ["task-id-1", "task-id-2"],
+    "surveyor_id": "surveyor-uuid",
+    "mandor_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12",
+    "notes": "Testing assignment"
+  }'
+```
+
+**Complete Workflow Test:**
+```bash
+# Run complete mandor workflow test
+node test-mandor-workflow.js
+
+# This will test:
+# 1. View SPK list
+# 2. View SPK detail  
+# 3. Filter SPK by status/priority
+# 4. Assign tasks to surveyor
+# 5. Verify assignment
+```
+
+### Complete Postman Collection
+
+Import collection lengkap untuk Dashboard + SPK Management:
 
 ```json
 {
   "info": {
-    "name": "Mandor Dashboard API",
+    "name": "Mandor Complete Dashboard & SPK Management API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Dashboard Overview",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/dashboard",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["api", "v1", "mandor", "{{mandor_id}}", "dashboard"]
+      "name": "Dashboard Endpoints",
+      "item": [
+        {
+          "name": "Dashboard Overview",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/dashboard",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "mandor", "{{mandor_id}}", "dashboard"]
+            }
+          }
+        },
+        {
+          "name": "Surveyor List",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/surveyors",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "mandor", "{{mandor_id}}", "surveyors"]
+            }
+          }
+        },
+        {
+          "name": "Real-time Tasks",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/tasks/realtime",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "mandor", "{{mandor_id}}", "tasks", "realtime"]
+            }
+          }
+        },
+        {
+          "name": "Daily Performance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/performance/daily",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "mandor", "{{mandor_id}}", "performance", "daily"]
+            }
+          }
         }
-      }
+      ]
     },
     {
-      "name": "Surveyor List",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/surveyors",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["api", "v1", "mandor", "{{mandor_id}}", "surveyors"]
+      "name": "SPK Management",
+      "item": [
+        {
+          "name": "Get SPK List (All)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/spk/mandor/{{mandor_id}}",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "spk", "mandor", "{{mandor_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Get SPK List (Filtered)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/spk/mandor/{{mandor_id}}?status=PENDING&priority=URGENT&limit=10",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "spk", "mandor", "{{mandor_id}}"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                },
+                {
+                  "key": "priority", 
+                  "value": "URGENT"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get SPK Detail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:3000/api/v1/spk/{{spk_id}}",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "spk", "{{spk_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Assign Tasks to Surveyor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id_tugas_list\": [\"{{task_id_1}}\", \"{{task_id_2}}\"],\n  \"surveyor_id\": \"{{surveyor_id}}\",\n  \"mandor_id\": \"{{mandor_id}}\",\n  \"notes\": \"Testing task assignment from Postman\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/spk/{{spk_id}}/assign-surveyor",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3000",
+              "path": ["api", "v1", "spk", "{{spk_id}}", "assign-surveyor"]
+            }
+          }
         }
-      }
-    },
-    {
-      "name": "Real-time Tasks",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/tasks/realtime",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["api", "v1", "mandor", "{{mandor_id}}", "tasks", "realtime"]
-        }
-      }
-    },
-    {
-      "name": "Daily Performance",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "http://localhost:3000/api/v1/mandor/{{mandor_id}}/performance/daily",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["api", "v1", "mandor", "{{mandor_id}}", "performance", "daily"]
-        }
-      }
+      ]
     }
   ],
   "variable": [
     {
       "key": "mandor_id",
-      "value": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12"
+      "value": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12",
+      "type": "string"
+    },
+    {
+      "key": "spk_id",
+      "value": "your-spk-id-here",
+      "type": "string"
+    },
+    {
+      "key": "surveyor_id",
+      "value": "your-surveyor-id-here",
+      "type": "string"
+    },
+    {
+      "key": "task_id_1",
+      "value": "your-task-id-1-here",
+      "type": "string"
+    },
+    {
+      "key": "task_id_2",
+      "value": "your-task-id-2-here",
+      "type": "string"
     }
   ]
 }
@@ -1020,9 +1803,14 @@ app.use(cors({
 - Message: "feat: Implement Priority 1 Mandor Dashboard Endpoints"
 
 **Files:**
-- Routes: `routes/mandorRoutes.js`
-- Tests: `test-mandor.js`
-- Documentation: `docs/API_MANDOR_DASHBOARD_GUIDE.md`
+- Dashboard Routes: `routes/mandorRoutes.js`
+- SPK Management Routes: `routes/spkValidasiDroneRoutes.js`
+- SPK Services: `services/spkValidasiDroneService.js`
+- Dashboard Tests: `test-mandor.js`
+- SPK Workflow Tests: `test-mandor-workflow.js`
+- Documentation: 
+  - `docs/API_MANDOR_DASHBOARD_GUIDE.md` (this file)
+  - `docs/API_SPK_VALIDASI_DRONE_GUIDE.md` (SPK Management detailed guide)
 
 ---
 
