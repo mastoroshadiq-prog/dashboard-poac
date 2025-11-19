@@ -781,6 +781,92 @@ async function insertLogAktivitas5W1H(data) {
   return null;
 }
 
+/**
+ * Get SPK grouped by status for Kanban Board
+ * 
+ * TUJUAN: Return SPK list grouped by status (PENDING, DIKERJAKAN, SELESAI)
+ * untuk ditampilkan dalam Kanban Board view
+ * 
+ * INPUT:
+ * {
+ *   divisi: string (optional),
+ *   afdeling: string (optional),
+ *   mandor_id: string (optional)
+ * }
+ * 
+ * OUTPUT:
+ * {
+ *   PENDING: [ { id_spk, nama_spk, ... }, ... ],
+ *   DIKERJAKAN: [ ... ],
+ *   SELESAI: [ ... ]
+ * }
+ */
+async function getSPKKanban(filters) {
+  try {
+    console.log('📋 [Service] Getting SPK Kanban...');
+    console.log('   Filters:', JSON.stringify(filters, null, 2));
+    
+    // Build query
+    let query = supabase
+      .from('spk_header')
+      .select('*')
+      .order('tanggal_dibuat', { ascending: false });
+    
+    // Apply filters if provided
+    if (filters.divisi) {
+      query = query.eq('divisi', filters.divisi);
+    }
+    if (filters.afdeling) {
+      query = query.eq('afdeling', filters.afdeling);
+    }
+    if (filters.mandor_id) {
+      query = query.eq('id_pelaksana', filters.mandor_id);
+    }
+    
+    const { data, error } = await query;
+    
+    if (error) {
+      console.error('❌ Supabase error:', error);
+      throw new Error(`Database error: ${error.message}`);
+    }
+    
+    // Group SPK by status
+    const result = {
+      PENDING: [],
+      DIKERJAKAN: [],
+      SELESAI: []
+    };
+    
+    if (data && data.length > 0) {
+      data.forEach(spk => {
+        const status = spk.status_spk || 'PENDING';
+        // Map various status names to standard kanban columns
+        if (status === 'BARU' || status === 'PENDING') {
+          result.PENDING.push(spk);
+        } else if (status === 'DIKERJAKAN' || status === 'DALAM_PROSES') {
+          result.DIKERJAKAN.push(spk);
+        } else if (status === 'SELESAI' || status === 'COMPLETED') {
+          result.SELESAI.push(spk);
+        } else {
+          // Default: add to PENDING
+          result.PENDING.push(spk);
+        }
+      });
+    }
+    
+    console.log('✅ SPK Kanban retrieved:');
+    console.log(`   PENDING: ${result.PENDING.length}`);
+    console.log(`   DIKERJAKAN: ${result.DIKERJAKAN.length}`);
+    console.log(`   SELESAI: ${result.SELESAI.length}`);
+    
+    return result;
+    
+  } catch (error) {
+    console.error('❌ [Service Error] getSPKKanban:', error.message);
+    throw error;
+  }
+}
+
 // ============================================================
 // EXPORTS
 // ============================================================
@@ -795,6 +881,7 @@ module.exports = {
   laporAph,
   laporSanitasi,
   getDaftarTugas,
+  getSPKKanban,
   // Export helpers untuk testing (optional)
   validateInput,
   autoTriggerWorkOrder,

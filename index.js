@@ -18,6 +18,8 @@ const cors = require('cors');
 const { supabase, testConnection } = require('./config/supabase');
 
 // 3. Import routes
+const authRoutes = require('./routes/authRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const spkRoutes = require('./routes/spkRoutes');
 const lifecycleRoutes = require('./routes/lifecycleRoutes');
@@ -27,6 +29,10 @@ const opsSpkRoutes = require('./routes/opsSpkRoutes');
 const validationRoutes = require('./routes/validationRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const mandorRoutes = require('./routes/mandorRoutes');
+const mandorListRoutes = require('./routes/mandorListRoutes');
+
+// Import Supabase Auth Middleware
+const verifySupabaseAuth = require('./middleware/supabaseAuthMiddleware');
 
 // 4. Initialize Express app
 const app = express();
@@ -78,6 +84,8 @@ app.get('/health', healthCheckHandler);
 app.get('/api/v1/health', healthCheckHandler); // Alias untuk frontend yang expect /api/v1 prefix
 
 // API v1 Routes
+app.use('/api/v1/auth', authRoutes); // Authentication routes (login, logout, change password)
+app.use('/api/v1/notifications', notificationRoutes); // Notifications (real-time alerts)
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/spk', spkRoutes);
 app.use('/api/v1/spk', spkValidasiDroneRoutes); // SPK Validasi Drone routes
@@ -85,10 +93,11 @@ app.use('/api/v1/lifecycle', lifecycleRoutes);
 app.use('/api/v1/drone', droneNdreRoutes);
 app.use('/api/v1/ops', opsSpkRoutes); // OPS Multi-Purpose SPK routes
 app.use('/api/v1/validation', validationRoutes); // Validation & Confusion Matrix routes
-app.use('/api/v1/analytics', analyticsRoutes); // Analytics & Performance routes
+app.use('/api/v1/analytics', analyticsRoutes); // Analytics & Performance routes (with anomaly detection & SPK creation)
 app.use('/api/v1/mandor', mandorRoutes); // Mandor Dashboard routes
+app.use('/api/v1/mandor', mandorListRoutes); // Mandor List endpoint for SPK assignment form
 
-// ðŸ” DEBUG: Print all registered routes
+// 🔍 DEBUG: Print all registered routes
 console.log('\nðŸ” [DEBUG] Registered /api/v1/spk routes:');
 console.log('  - spkRoutes registered');
 console.log('  - spkValidasiDroneRoutes registered');

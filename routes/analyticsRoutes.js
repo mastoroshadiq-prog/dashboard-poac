@@ -7,6 +7,8 @@
 
 const express = require('express');
 const router = express.Router();
+const analyticsService = require('../services/analyticsService');
+const spkAnomalyService = require('../services/spkAnomalyService');
 
 // 🔐 RBAC Middleware
 const { authenticateJWT, authorizeRole } = require('../middleware/authMiddleware');
@@ -77,69 +79,35 @@ const { authenticateJWT, authorizeRole } = require('../middleware/authMiddleware
  * - Authorization: ASISTEN, ADMIN
  */
 router.get('/anomaly-detection', 
-  // ⚠️  TEMPORARY: No auth for frontend integration testing
-  // authenticateJWT,
-  // authorizeRole(['ASISTEN', 'ADMIN']),
+  authenticateJWT,
+  authorizeRole(['ASISTEN', 'ADMIN']),
   async (req, res) => {
   try {
-    console.log('🔍 [Analytics] GET Anomaly Detection (NO AUTH)');
+    console.log('🔍 [Analytics] GET Anomaly Detection');
     console.log('   Filters:', req.query);
     
-    // TODO: Implement anomaly detection logic
-    // Logic:
-    // 1. Query kebun_observasi untuk pohon miring (angle > 30°)
-    // 2. Query untuk pohon mati (status = "MATI")
-    // 3. Query untuk gambut amblas (elevation issues)
-    // 4. Query untuk spacing issues (distance calculation)
-    // 5. Group by severity and location
-    
-    // STUB RESPONSE (for now) - NO NULL VALUES!
+    const filters = {
+      divisi: req.query.divisi || null,
+      afdeling: req.query.afdeling || null,
+      blok: req.query.blok || null,
+      severity: req.query.severity || null,
+      date_from: req.query.date_from || null,
+      date_to: req.query.date_to || null
+    };
+
+    const result = await analyticsService.detectAnomalies(filters);
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: result.error || 'Gagal mendeteksi anomali'
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      data: {
-        anomalies: [
-          {
-            type: "POHON_MIRING",
-            severity: "HIGH",
-            count: 12,
-            locations: ["Blok A1 (3 pohon)", "Blok A5 (9 pohon)"],
-            description: "Pohon miring >30 derajat, risiko tumbang",
-            recommended_action: "Prioritas APH segera, evaluasi sistem akar"
-          },
-          {
-            type: "POHON_MATI",
-            severity: "CRITICAL",
-            count: 8,
-            locations: ["Blok B2 (5 pohon)", "Blok B7 (3 pohon)"],
-            description: "Pohon mati, perlu replanting",
-            recommended_action: "Create SPK Sanitasi + Replanting"
-          },
-          {
-            type: "GAMBUT_AMBLAS",
-            severity: "MEDIUM",
-            count: 5,
-            locations: ["Blok C1 (2 blok)", "Blok C3 (3 blok)"],
-            description: "Tanah gambut amblas, drainage issue",
-            recommended_action: "Perbaikan drainage system, monitoring rutin"
-          },
-          {
-            type: "SPACING_ISSUE",
-            severity: "LOW",
-            count: 15,
-            locations: ["Multiple blocks"],
-            description: "Jarak tanam tidak sesuai standar (terlalu rapat/jauh)",
-            recommended_action: "Review planting plan, adjust untuk area baru"
-          }
-        ],
-        summary: {
-          total_anomalies: 40,
-          critical: 8,
-          high: 12,
-          medium: 5,
-          low: 15
-        }
-      },
-      message: "Anomaly detection berhasil diambil (STUB - belum implement)"
+      data: result.data,
+      message: "Anomaly detection berhasil diambil"
     });
     
   } catch (error) {
@@ -312,5 +280,156 @@ router.get('/mandor-performance',
     });
   }
 });
+
+/**
+ * POST /api/v1/analytics/create-spk-from-anomaly
+ * 
+ * TUJUAN: Create SPK automatically from detected anomaly
+ * DASHBOARD: Tier 3 Asisten Manager
+ * 
+ * REQUEST BODY:
+ * {
+ *   "anomaly_type": "POHON_MIRING" | "POHON_MATI" | "NDRE_STRES_BERAT" | "GAMBUT_AMBLAS" | "SPACING_ISSUE",
+ *   "anomaly_ids": ["id-obs-1", "id-obs-2", ...], // Optional
+ *   "mandor_id": "uuid-mandor",
+ *   "priority": "URGENT" | "HIGH" | "NORMAL" | "LOW",
+ *   "notes": "Catatan tambahan untuk SPK"
+ * }
+ * 
+ * RESPONSE SUCCESS (201):
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "spk": {
+ *       "id_spk": "uuid",
+ *       "nomor_spk": "SPK-POH-123456",
+ *       "nama_spk": "SPK APH - Pohon Miring - 19/11/2025",
+ *       "jenis_kegiatan": "APH",
+ *       "status": "BARU",
+ *       "prioritas": "HIGH",
+ *       "deadline": "2025-11-26"
+ *     },
+ *     "tugas": {
+ *       "id_tugas": "uuid",
+ *       "assigned_to_mandor": "uuid-mandor",
+ *       "status": "PENDING"
+ *     }
+ *   },
+ *   "message": "SPK berhasil dibuat dari anomaly detection"
+ * }
+ * 
+ * 🔐 SECURITY:
+ * - Authentication: JWT Required
+ * - Authorization: ASISTEN, ADMIN
+ */
+router.post('/create-spk-from-anomaly',
+  authenticateJWT,
+  authorizeRole(['ASISTEN', 'ADMIN']),
+  async (req, res) => {
+    try {
+      console.log('🔧 [Analytics] POST Create SPK from Anomaly');
+      console.log('   Body:', req.body);
+
+      const { anomaly_type, anomaly_ids, mandor_id, priority, notes } = req.body;
+      const asisten_id = req.user.id_pihak; // From JWT token
+
+      // Validation
+      if (!anomaly_type || !mandor_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'anomaly_type dan mandor_id wajib diisi'
+        });
+      }
+
+      const result = await spkAnomalyService.createSPKFromAnomaly({
+        anomaly_type,
+        anomaly_ids,
+        mandor_id,
+        asisten_id,
+        priority: priority || 'NORMAL',
+        notes
+      });
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      return res.status(201).json(result);
+
+    } catch (error) {
+      console.error('❌ [API Error] POST /api/v1/analytics/create-spk-from-anomaly:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+        message: 'Gagal membuat SPK dari anomaly'
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/analytics/bulk-create-spk-from-anomalies
+ * 
+ * TUJUAN: Bulk create multiple SPKs from multiple anomalies
+ * 
+ * REQUEST BODY:
+ * {
+ *   "anomalies": [
+ *     {
+ *       "anomaly_type": "POHON_MIRING",
+ *       "anomaly_ids": [...],
+ *       "mandor_id": "uuid-mandor-1",
+ *       "priority": "HIGH"
+ *     },
+ *     {
+ *       "anomaly_type": "POHON_MATI",
+ *       "anomaly_ids": [...],
+ *       "mandor_id": "uuid-mandor-2",
+ *       "priority": "CRITICAL"
+ *     }
+ *   ]
+ * }
+ * 
+ * RESPONSE SUCCESS (201):
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "created": [...],
+ *     "failed": [...]
+ *   },
+ *   "message": "2 SPK berhasil dibuat, 0 gagal"
+ * }
+ */
+router.post('/bulk-create-spk-from-anomalies',
+  authenticateJWT,
+  authorizeRole(['ASISTEN', 'ADMIN']),
+  async (req, res) => {
+    try {
+      console.log('🔧 [Analytics] POST Bulk Create SPKs from Anomalies');
+      
+      const { anomalies } = req.body;
+      const asisten_id = req.user.id_pihak;
+
+      if (!anomalies || !Array.isArray(anomalies) || anomalies.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'anomalies array wajib diisi'
+        });
+      }
+
+      const result = await spkAnomalyService.bulkCreateSPKFromAnomalies(anomalies, asisten_id);
+
+      return res.status(201).json(result);
+
+    } catch (error) {
+      console.error('❌ [API Error] POST /api/v1/analytics/bulk-create-spk-from-anomalies:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+        message: 'Gagal bulk create SPK'
+      });
+    }
+  }
+);
 
 module.exports = router;
